@@ -1,0 +1,17 @@
+.git
+.github
+.gitattributes
+.gitignore
+.dockerignore
+.env
+.env.*
+node_modules
+data
+test
+playwright.config.js
+playwright-report
+test-results
+*.md
+docker-compose*.yml
+.vscode
+.idea

@@ -1,0 +1,34 @@
+services:
+  openpad:
+    build: .
+    image: openpad:latest
+    container_name: openpad
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      APP_NAME: "${APP_NAME:-openpad}"
+      DB_PATH: "/data/openpad.db"
+      SYNC_INTERVAL_MS: "${SYNC_INTERVAL_MS:-5000}"
+      REQUEST_TIMEOUT_MS: "${REQUEST_TIMEOUT_MS:-10000}"
+      MAX_BODY_BYTES: "${MAX_BODY_BYTES:-1048576}"
+      MAX_DEPTH: "${MAX_DEPTH:-10}"
+      RATE_LIMIT_PER_MIN: "${RATE_LIMIT_PER_MIN:-120}"
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    volumes:
+      - openpad-data:/data
+    # Sistema de ficheiros da imagem só de leitura; só /data (volume) e /tmp são graváveis.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  openpad-data:

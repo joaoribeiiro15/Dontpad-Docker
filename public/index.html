@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{APP_NAME}}</title>
+    <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/home.css" />
+  </head>
+  <body>
+    <main class="home">
+      <h1 class="brand">{{APP_NAME}}</h1>
+      <p class="tagline">A forma mais simples de partilhar texto</p>
+      <form id="go-form" class="go-form" autocomplete="off">
+        <label for="name" id="host-label" class="host-label">localhost/</label>
+        <input id="name" name="name" type="text" placeholder="your-secret-page" autocapitalize="off" spellcheck="false" autofocus />
+        <button type="submit">Go!</button>
+      </form>
+      <p class="note">No login required</p>
+    </main>
+    <script src="/assets/home.js" type="module"></script>
+  </body>
+</html>

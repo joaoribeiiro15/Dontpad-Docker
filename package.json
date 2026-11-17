@@ -1,0 +1,27 @@
+{
+  "name": "openpad",
+  "version": "1.0.0",
+  "description": "Clone self-hosted do dontpad.com: páginas de texto partilhadas por URL, gravação automática e sincronização por polling, num único contentor Docker.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.2"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fastify/formbody": "^9.0.2",
+    "@fastify/rate-limit": "^11.2.2",
+    "@fastify/static": "^10.1.11",
+    "better-sqlite3": "^13.2.0",
+    "fastify": "^5.12.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
+  }
+}
