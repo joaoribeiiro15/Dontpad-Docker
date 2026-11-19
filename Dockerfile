@@ -3,8 +3,10 @@
 # ---- Dependências de produção -------------------------------------------
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY package.json package-lock.json .npmrc ./
+# --ignore-scripts (também no .npmrc): o better-sqlite3 traz binários N-API já compilados (prebuilds/linux-x64.node,
+# glibc >= 2.34). Sem esta opção o npm 10 tenta "node-gyp rebuild", que precisa de Python e g++.
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # ---- Imagem final -----------------------------------------------------------
 # bookworm-slim em vez de Alpine: o better-sqlite3 traz binários pré-compilados
@@ -24,6 +26,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+
+# Falha já na construção se o binário do SQLite não carregar nesta plataforma.
+RUN node -e "const D=require('better-sqlite3'); new D(':memory:').prepare('select 1').get()"
 
 # O código fica com dono root (só leitura para o processo); só /data é gravável.
 RUN mkdir -p /data && chown node:node /data

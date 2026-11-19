@@ -2,6 +2,8 @@ services:
   openpad:
     build: .
     image: openpad:latest
+    # A imagem é sempre construída localmente: não tentar descarregá-la de um registo.
+    pull_policy: build
     container_name: openpad
     restart: unless-stopped
     init: true
