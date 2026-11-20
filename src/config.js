@@ -31,6 +31,11 @@ export function loadConfig(env = process.env) {
     maxDepth: int(env, 'MAX_DEPTH', 10, 1),
     rateLimitPerMin: int(env, 'RATE_LIMIT_PER_MIN', 600, 1),
     maxStreamsPerIp: int(env, 'MAX_STREAMS_PER_IP', 20, 1),
+    /** Shared files live in memory only and expire after FILE_TTL_MS. */
+    maxFileBytes: int(env, 'MAX_FILE_BYTES', 10 * 1024 * 1024, 1),
+    maxFilesPerPage: int(env, 'MAX_FILES_PER_PAGE', 20, 1),
+    maxFilesTotalBytes: int(env, 'MAX_FILES_TOTAL_BYTES', 256 * 1024 * 1024, 1),
+    fileTtlMs: int(env, 'FILE_TTL_MS', 6 * 60 * 60 * 1000, 1000),
     trustProxy: bool(env, 'TRUST_PROXY', false),
     logLevel: env.LOG_LEVEL || 'info',
   });

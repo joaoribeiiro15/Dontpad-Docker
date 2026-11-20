@@ -68,7 +68,16 @@ test('GET /api/config', async (t) => {
   t.after(() => app.close());
   const res = await app.inject('/api/config');
   assert.equal(res.headers['cache-control'], 'no-store');
-  assert.deepEqual(res.json(), { appName: 'x', syncIntervalMs: 1234, requestTimeoutMs: 999, maxBodyBytes: 1048576, maxDepth: 10 });
+  assert.deepEqual(res.json(), {
+    appName: 'x',
+    syncIntervalMs: 1234,
+    requestTimeoutMs: 999,
+    maxBodyBytes: 1048576,
+    maxDepth: 10,
+    maxFileBytes: 10 * 1024 * 1024,
+    maxFilesPerPage: 20,
+    fileTtlMs: 6 * 60 * 60 * 1000,
+  });
 });
 
 test('read: changed false when the version matches, full text otherwise', async (t) => {

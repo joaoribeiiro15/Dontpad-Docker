@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { EventHub } from './events.js';
+import { FileStore } from './files.js';
 import apiRoutes from './routes/api.js';
 import pageRoutes from './routes/pages.js';
 
@@ -15,7 +16,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 
 const SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  // blob: images show a dropped picture locally while it is still uploading.
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
@@ -29,6 +31,18 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
   const config = Object.freeze({ ...loadConfig(), ...overrides });
   const db = openDatabase(config.dbPath, now ? { now } : undefined);
   const hub = new EventHub({ maxPerIp: config.maxStreamsPerIp });
+  const files = new FileStore({
+    maxFileBytes: config.maxFileBytes,
+    maxFilesPerPage: config.maxFilesPerPage,
+    maxTotalBytes: config.maxFilesTotalBytes,
+    ttlMs: config.fileTtlMs,
+    ...(now ? { now } : {}),
+  });
+  // Expired files disappear for everyone on the page.
+  const sweeper = setInterval(() => {
+    for (const file of files.sweep()) hub.publish(file.path, 'file-removed', { id: file.id, expired: true });
+  }, Math.min(30_000, config.fileTtlMs));
+  sweeper.unref();
 
   const app = Fastify({
     logger: logger ?? { level: config.logLevel },
@@ -56,6 +70,7 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
   app.decorate('config', config);
   app.decorate('db', db);
   app.decorate('hub', hub);
+  app.decorate('files', files);
 
   // Logs: method, route pattern, status code and duration. Never the page path or its text.
   app.addHook('onResponse', async (request, reply) => {
@@ -71,12 +86,18 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
   });
 
   app.addHook('onSend', async (request, reply) => {
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) reply.header(name, value);
+    // A route may set a stricter policy (shared files are served in a sandbox).
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!reply.hasHeader(name)) reply.header(name, value);
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {
     if (error.apiError) return reply.code(error.statusCode).send({ error: error.apiError });
-    if (error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: 'body-too-large' });
+    if (error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      const isFile = (request.raw.url || '').startsWith('/api/files/');
+      return reply.code(413).send({ error: isFile ? 'file-too-large' : 'body-too-large' });
+    }
     if (error.statusCode && error.statusCode < 500) {
       return reply.code(error.statusCode).send({ error: error.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE' ? 'unsupported-media-type' : 'bad-request' });
     }
@@ -98,10 +119,13 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
     maxAge: 0,
     etag: true,
   });
-  await app.register(apiRoutes, { config, db, hub });
+  await app.register(apiRoutes, { config, db, hub, files });
   await app.register(pageRoutes, { config, db, publicDir: PUBLIC_DIR });
 
-  app.addHook('preClose', async () => hub.close());
+  app.addHook('preClose', async () => {
+    clearInterval(sweeper);
+    hub.close();
+  });
   app.addHook('onClose', async () => db.close());
   return app;
 }

@@ -295,6 +295,130 @@ test('text and subpage names are never interpreted as HTML', async ({ page, requ
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
 });
 
+/** Drops a generated PNG of the given size onto the page, at (x, y). */
+async function dropImage(page, { width, height, x, y, name = 'photo.png' }) {
+  await page.evaluate(
+    async ({ width, height, x, y, name }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      const g = ctx.createLinearGradient(0, 0, width, height);
+      g.addColorStop(0, '#5b5bf0');
+      g.addColorStop(1, '#ff8bd1');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, width, height);
+      // noise, so the PNG is large and the preview is clearly smaller
+      for (let k = 0; k < 4000; k++) {
+        ctx.fillStyle = `hsl(${(k * 37) % 360} 70% 60%)`;
+        ctx.fillRect((k * 7919) % width, (k * 104729) % height, 12, 12);
+      }
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+      const file = new File([blob], name, { type: 'image/png' });
+      window.__droppedSize = file.size;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const fire = (type) => document.body.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      fire('dragenter');
+      fire('dragover');
+      fire('drop');
+    },
+    { width, height, x, y, name },
+  );
+  return page.evaluate(() => window.__droppedSize);
+}
+
+test('a dropped image floats for everyone with a light preview, and downloads in full quality', async ({ browser, request }) => {
+  const path = `/${unique('files')}`;
+  const ctxA = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const ctxB = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const a = await openPad(ctxA, path);
+  const b = await openPad(ctxB, path);
+  await expect(b.locator('#sync')).toHaveAttribute('data-state', 'live');
+
+  const size = await dropImage(a, { width: 2400, height: 1600, x: 400, y: 300 });
+
+  // A sees its picture immediately; B sees the window appear in real time.
+  const winA = a.locator('.file-win').first();
+  await expect(winA.locator('.file-thumb img')).toBeVisible();
+  const winB = b.locator('.file-win').first();
+  await expect(winB).toBeVisible({ timeout: LIVE * 2 });
+  await expect(winB.locator('.file-name')).toHaveText('photo.png');
+  await expect(winB.locator('.file-size')).toContainText('2400 × 1600');
+  await expect(winB.locator('.file-thumb')).toHaveClass(/loaded/);
+
+  // The preview on the page is a reduced copy...
+  const shown = await winB.locator('.file-thumb img').evaluate((img) => ({ w: img.naturalWidth, h: img.naturalHeight, src: img.getAttribute('src') }));
+  expect(shown.w).toBe(1280);
+  expect(shown.h).toBe(853);
+  const previewBytes = (await (await request.get(shown.src)).body()).length;
+  expect(previewBytes).toBeLessThan(size);
+
+  // ...and the download is the original, byte for byte in size.
+  await expect(winB.locator('.file-download')).toHaveText('Download original');
+  const href = await winB.locator('.file-download').getAttribute('href');
+  const original = await request.get(href);
+  expect(original.headers()['content-disposition']).toContain('attachment');
+  expect((await original.body()).length).toBe(size);
+
+  // Lightbox with the larger preview. (force: the window gently floats, so it is never "stable".)
+  await winB.locator('.file-thumb').click({ force: true });
+  await expect(b.locator('#lightbox')).toBeVisible();
+  await expect(b.locator('.lightbox-info')).toContainText('2400 × 1600');
+  await b.keyboard.press('Escape');
+  await expect(b.locator('#lightbox')).toBeHidden();
+
+  // Dragging in A moves the window in B.
+  const before = await winB.evaluate((el) => el.style.transform);
+  const head = await winA.locator('.file-head').boundingBox();
+  await a.mouse.move(head.x + 60, head.y + 15);
+  await a.mouse.down();
+  for (let k = 1; k <= 10; k++) await a.mouse.move(head.x + 60 + k * 40, head.y + 15 + k * 25, { steps: 2 });
+  await a.mouse.up();
+  await expect(async () => {
+    expect(await winB.evaluate((el) => el.style.transform)).not.toBe(before);
+  }).toPass({ timeout: LIVE });
+  const posA = await winA.evaluate((el) => el.style.transform);
+  await expect(async () => {
+    expect(await winB.evaluate((el) => el.style.transform)).toBe(posA);
+  }).toPass({ timeout: LIVE });
+
+  // Removing in B (two clicks) removes it for A.
+  await winB.locator('.file-close').click({ force: true });
+  await expect(winB.locator('.file-close')).toHaveClass(/armed/);
+  await winB.locator('.file-close').click({ force: true });
+  await expect(b.locator('.file-win')).toHaveCount(0);
+  await expect(a.locator('.file-win')).toHaveCount(0, { timeout: LIVE });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test('the paperclip shares any file; late joiners see it too', async ({ browser }) => {
+  const path = `/${unique('attach')}`;
+  const ctxA = await browser.newContext();
+  const a = await openPad(ctxA, path);
+  await a.locator('#file-input').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello from a file') });
+  const win = a.locator('.file-win');
+  await expect(win).toHaveCount(1);
+  await expect(win.locator('.badge-ext')).toHaveText('TXT');
+  await expect(win.locator('.file-download')).toHaveText('Download');
+  await expect(win.locator('.file-download')).toHaveAttribute('href', /\/api\/file\//);
+  await expect(win.locator('.file-expiry')).toContainText('Expires in');
+
+  const ctxB = await browser.newContext();
+  const b = await openPad(ctxB, path);
+  await expect(b.locator('.file-win .file-name')).toHaveText('notes.txt');
+
+  // Minimising is local to each browser.
+  await b.locator('.file-collapse').click({ force: true });
+  await expect(b.locator('.file-win')).toHaveClass(/collapsed/);
+  await expect(a.locator('.file-win')).not.toHaveClass(/collapsed/);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 /** Starts a dedicated server, so the test can stop and restart it. */
 function startServer(port, dbPath) {
   const child = spawn(process.execPath, ['src/server.js'], {

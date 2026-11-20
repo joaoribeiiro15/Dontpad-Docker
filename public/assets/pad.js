@@ -9,6 +9,7 @@
 // - Never two requests at the same time. Edits by two people in different
 //   parts of the text are merged; overlapping edits open the conflict dialog.
 
+import { createFiles } from './files.js';
 import { merge3 } from './merge.js';
 
 const TICK_MS = 50;
@@ -437,6 +438,7 @@ function tick() {
 
 let events = null;
 let reconnectTimer = null;
+let files = null; // floating shared files (files.js)
 const hasEventSource = typeof EventSource !== 'undefined';
 
 function streamClosed() {
@@ -452,6 +454,7 @@ function connectEvents() {
   clearTimeout(reconnectTimer);
   if (events) events.close();
   events = new EventSource(api('events'));
+  files?.attach(events);
 
   const onVersion = (e) => {
     try {
@@ -811,6 +814,7 @@ async function loadConfig() {
     if (typeof cfg.appName === 'string' && cfg.appName) state.appName = cfg.appName;
     if (Number.isFinite(cfg.maxBodyBytes)) state.maxBodyBytes = cfg.maxBodyBytes;
     if (Number.isFinite(cfg.maxDepth)) state.maxDepth = cfg.maxDepth;
+    files?.setLimits(cfg);
   } catch {
     // Defaults are used.
   }
@@ -851,6 +855,7 @@ async function start() {
   }
   renderCrumbs();
   setProgress(true);
+  files = createFiles({ encodedPath, request, toast, formatBytes });
   await loadConfig();
   document.title = `${segments[segments.length - 1]} | ${state.appName}`;
 
@@ -859,6 +864,7 @@ async function start() {
   if (!ok) return;
 
   rememberRecent();
+  files.refresh();
   connectEvents();
   loadMenu({ initial: true });
   setInterval(tick, TICK_MS);

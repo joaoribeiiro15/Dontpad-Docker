@@ -29,6 +29,9 @@ docker compose down                 # stop; the data stays in the openpad-data v
 - **Subpages.** `/parent/child` is its own page. A sidebar lists the direct subpages and lets you create new ones.
 - **Survives outages.** If the server goes away, your text stays in the editor, the indicators say so, and it is saved as soon as the server is back. While the live connection is down, the page falls back to polling.
 - **Light and dark themes**, an optional monospace font, a word and character count, and *Recently opened* pages on the home page (stored only in your browser).
+- **Shared files in floating windows.** Drag files onto a page, paste them, or use the paperclip. Each file appears for everyone on the page, in real time, in a small window that floats over the page. Anyone can drag a window around, and everyone sees it move. Any file type works.
+- **Image previews.** A dropped image shows up straight away as a lighter preview (at most 1280 px, made in the uploader's browser) and opens larger on click. **Download original** always returns the exact file that was uploaded, at full quality.
+- **Files are temporary.** They are kept only in the server's memory, never on disk. Each one expires after `FILE_TTL_MS` (6 hours by default), and a restart, crash or redeploy clears them all. The page text itself is stored permanently as before.
 - **Export** as `.txt`, or as a `.zip` with all subpages.
 - **Keyboard:** Tab inserts a tab, Ctrl/Cmd+S saves right away, and the browser warns before you leave with unsaved text.
 
@@ -48,10 +51,16 @@ Every variable is optional. With Compose, copy `.env.example` to `.env` and chan
 | `MAX_DEPTH` | `10` | Maximum subpage depth |
 | `RATE_LIMIT_PER_MIN` | `600` | API requests per IP per minute |
 | `MAX_STREAMS_PER_IP` | `20` | Open live connections per IP (one per open tab) |
+| `MAX_FILE_BYTES` | `10485760` | Largest shared file (10 MB) |
+| `MAX_FILES_PER_PAGE` | `20` | Shared files on one page at a time |
+| `MAX_FILES_TOTAL_BYTES` | `268435456` | Memory used by all shared files together (256 MB). New uploads get 507 when it is full |
+| `FILE_TTL_MS` | `21600000` | How long a shared file lives (6 hours) |
 | `TRUST_PROXY` | `false` | Read the client IP from `X-Forwarded-For` behind a reverse proxy |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 Someone typing non-stop sends about one save per second. The default rate limit leaves plenty of room for several tabs behind the same IP address.
+
+Shared files live in the process's memory, so give the container at least `MAX_FILES_TOTAL_BYTES` plus about 100 MB of RAM.
 
 ## Exposing it to the internet
 
@@ -74,6 +83,8 @@ location /api/events/ {
 }
 ```
 
+Nginx also rejects uploads over 1 MB by default. To allow shared files, set `client_max_body_size 13m;` (`MAX_FILE_BYTES` plus room for the 2 MB image preview).
+
 ## API
 
 The API lives on the same origin, under `/api`. Every response carries `Cache-Control: no-store`.
@@ -82,10 +93,16 @@ The API lives on the same origin, under `/api`. Every response carries `Cache-Co
 | --- | --- | --- |
 | `GET /api/body/<path>?lastModified=<n>` | Read the text if it changed since `n` | `{"changed": false, "lastModified": n}` or `{"changed": true, "lastModified": m, "body": "..."}` |
 | `POST /api/body/<path>` | Save `text`, `lastModified` and `force` as `x-www-form-urlencoded` | The new `lastModified` as a JSON number |
-| `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}` |
+| `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}`, `file-added` with the file, `file-moved` with `{"id", "x", "y", "z"}`, `file-removed` with `{"id"}` |
+| `GET /api/files/<path>` | The page's shared files | An array of `{"id", "name", "type", "size", "x", "y", "z", "expiresAt", "preview", ...}` |
+| `POST /api/files/<path>?x=&y=` | Share a file. The body is the raw bytes (`application/octet-stream`). The name goes in `X-File-Name`, URI-encoded, and the type in `X-File-Type`. `x` and `y` are fractions from 0 to 1 | 201 with the file |
+| `GET /api/file/<id>` | Download the original, byte for byte | `application/octet-stream`, as an attachment |
+| `GET /api/file/<id>/preview` | The light image preview | The image, or 404 `no-preview` if the file has none |
+| `PATCH /api/file/<id>` | Move a window: JSON `{"x", "y", "front"}` | `{"id", "x", "y", "z"}` |
+| `DELETE /api/file/<id>` | Remove a file for everyone | `{"removed": id}` |
 | `GET /api/menu/<path>` | Direct subpages | `["meeting", "shopping"]`, unordered |
 | `GET /api/zip/<path>` | The page and its subpages, one `.txt` each | `application/zip` |
-| `GET /api/config` | Browser configuration | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes", "maxDepth"}` |
+| `GET /api/config` | Browser configuration | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes", "maxDepth", "maxFileBytes", "maxFilesPerPage", "fileTtlMs"}` |
 | `GET /healthz` | Health check | `{"status": "ok"}` |
 
 Errors when saving:
@@ -98,12 +115,23 @@ Errors when saving:
 | Invalid or reserved path | 400 | `{"error":"invalid-path"}` |
 | Rate limit exceeded | 429 | `{"error":"rate-limited"}` |
 
+Errors when sharing a file:
+
+| Situation | Status | Body |
+| --- | --- | --- |
+| File larger than `MAX_FILE_BYTES` | 413 | `{"error":"file-too-large"}` |
+| Page already has `MAX_FILES_PER_PAGE` files | 409 | `{"error":"too-many-files"}` |
+| `MAX_FILES_TOTAL_BYTES` reached | 507 | `{"error":"storage-full"}` |
+| Empty file | 400 | `{"error":"empty-file"}` |
+| Unknown or expired id | 404 | `{"error":"file-not-found"}` |
+
 Example:
 
 ```bash
 curl "http://localhost:3000/api/body/meeting?lastModified=0"
 curl -X POST --data-urlencode "text@notes.txt" -d lastModified=0 -d force=true http://localhost:3000/api/body/meeting
 curl -N http://localhost:3000/api/events/meeting
+curl -X POST -H "content-type: application/octet-stream" -H "x-file-name: report.pdf" --data-binary @report.pdf http://localhost:3000/api/files/meeting
 ```
 
 ### Path rules
@@ -141,6 +169,8 @@ As with the original, anyone who knows a URL can read and write it: the page nam
 - Prepared statements with parameters only.
 - Per-IP rate limit on the API and a per-IP cap on live connections, both answering 429. The browser backs off up to 60 seconds and recovers after a success.
 - Per-page size limit and a request body limit on the server.
+- Shared files are always downloaded as attachments with `application/octet-stream` and a sandboxing CSP, so an uploaded HTML or SVG file never runs on this origin. Inline previews are only served for raster images (no SVG). File names only reach the DOM through `textContent`.
+- Shared files have a per-file, per-page and total memory limit, and expire on their own.
 - `Content-Security-Policy: default-src 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`.
 - `robots.txt` blocks everything, and editing pages and the API send `X-Robots-Tag: noindex`.
 - The process runs as the `node` user. With Compose the container filesystem is read-only except `/data` and `/tmp`, with no capabilities.
