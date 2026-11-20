@@ -10,6 +10,7 @@ import { loadConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { EventHub } from './events.js';
 import { FileStore } from './files.js';
+import { createLocks } from './locks.js';
 import apiRoutes from './routes/api.js';
 import pageRoutes from './routes/pages.js';
 
@@ -32,6 +33,7 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
   const config = Object.freeze({ ...loadConfig(), ...overrides });
   const db = openDatabase(config.dbPath, now ? { now } : undefined);
   const address = addressStore(config, db);
+  const locks = createLocks(db);
   const hub = new EventHub({ maxPerIp: config.maxStreamsPerIp });
   const files = new FileStore({
     maxFileBytes: config.maxFileBytes,
@@ -121,7 +123,7 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
     maxAge: 0,
     etag: true,
   });
-  await app.register(apiRoutes, { config, db, hub, files, address });
+  await app.register(apiRoutes, { config, db, hub, files, address, locks });
   await app.register(pageRoutes, { config, db, address, publicDir: PUBLIC_DIR });
 
   app.addHook('preClose', async () => {

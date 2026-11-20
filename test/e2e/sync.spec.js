@@ -564,3 +564,80 @@ test('deleting a page kicks everyone on it back to the home page', async ({ brow
   await ctxA.close();
   await ctxB.close();
 });
+
+test('a password locks everyone else out; they get back in by typing it', async ({ browser, request }) => {
+  const path = `/${unique('vault')}`;
+  await seed(request, path, 'the secret plan');
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await openPad(ctxA, path);
+  const b = await openPad(ctxB, path);
+  await expect(a.locator('#presence-count')).toHaveText('2');
+
+  // A protects the page from the menu.
+  await a.locator('#menu-btn').click();
+  await a.locator('#act-protect').click();
+  await expect(a.locator('#protect-dialog')).toBeVisible();
+  await expect(a.locator('#protect-others')).toContainText('1 other person');
+  await a.locator('#protect-password').fill('abc');
+  await a.locator('#protect-confirm').fill('abc');
+  await a.locator('#protect-save').click();
+  await expect(a.locator('#protect-error')).toContainText('at least 4');
+  await a.locator('#protect-password').fill('open sesame');
+  await a.locator('#protect-confirm').fill('open sesame!');
+  await a.locator('#protect-save').click();
+  await expect(a.locator('#protect-error')).toContainText('different');
+  await a.locator('#protect-confirm').fill('open sesame');
+  await a.locator('#protect-save').click();
+  await expect(a.locator('#protect-dialog')).toBeHidden();
+
+  // A stays in, with the badge; B is locked out and the text disappears.
+  await expect(a.locator('#lock-badge')).toBeVisible();
+  await expect(b.locator('#locked')).toBeVisible();
+  await expect(b.locator('#locked-text')).toContainText('Someone just set a password');
+  await expect(b.locator('#text')).toHaveValue('');
+  await expect(a.locator('#locked')).toBeHidden();
+  await expect(a.locator('#sync')).toHaveAttribute('data-state', 'live');
+  await expect(a.locator('#text')).toHaveValue('the secret plan');
+
+  // Without the key, the API refuses B.
+  expect((await b.request.get(`/api/body${path}?lastModified=0`)).status()).toBe(401);
+
+  // A keeps editing; B types a wrong password, then the right one, and sees the latest text.
+  await a.locator('#text').fill('the secret plan, version 2');
+  await expect(a.locator('#save')).toHaveAttribute('data-state', 'saved');
+  await b.locator('#unlock-password').fill('wrong');
+  await b.locator('#unlock-submit').click();
+  await expect(b.locator('#unlock-error')).toContainText('Wrong password');
+  await b.locator('#unlock-password').fill('open sesame');
+  await b.locator('#unlock-submit').click();
+  await expect(b.locator('#locked')).toBeHidden();
+  await expect(b.locator('#text')).toHaveValue('the secret plan, version 2');
+  await expect(b.locator('#lock-badge')).toBeVisible();
+  await expect(b.locator('#sync')).toHaveAttribute('data-state', 'live');
+
+  // Someone new must type it before anything loads; a reload keeps B's access.
+  const ctxC = await browser.newContext();
+  const c = await ctxC.newPage();
+  await c.goto(path);
+  await expect(c.locator('#locked')).toBeVisible();
+  await expect(c.locator('#locked-text')).toContainText('Type the password to open');
+  await expect(c.locator('#text')).toHaveValue('');
+  await c.locator('#unlock-password').fill('open sesame');
+  await c.keyboard.press('Enter');
+  await expect(c.locator('#text')).toHaveValue('the secret plan, version 2');
+  await b.reload();
+  await expect(b.locator('#text')).toHaveValue('the secret plan, version 2');
+  await expect(b.locator('#locked')).toBeHidden();
+
+  // Removing the password: badge gone for everyone on the page.
+  await a.locator('#menu-btn').click();
+  await a.locator('#act-unprotect').click();
+  await expect(a.locator('#lock-badge')).toBeHidden();
+  await expect(b.locator('#lock-badge')).toBeHidden();
+  expect((await request.get(`/api/body${path}?lastModified=0`)).status()).toBe(200);
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});

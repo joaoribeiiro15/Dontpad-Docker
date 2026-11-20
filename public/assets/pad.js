@@ -74,6 +74,11 @@ const state = {
   presence: 0,
   deleting: false, // our own DELETE is in flight
   deleted: false, // the page was deleted (by us or someone else): leaving
+  protected: false, // the page has a password
+  locked: false, // we need the password (password screen showing)
+  locking: false, // our own "set password" request is in flight
+  lockNoticePending: false, // a `locked` notice arrived during it
+  stashedText: null, // our text while the password screen hides it
 };
 
 // ---- HTTP -------------------------------------------------------------------
@@ -312,6 +317,7 @@ function handleFailure(err) {
   const now = Date.now();
   if (err instanceof HttpError) {
     if (err.status === 410) return pageDeleted(false); // deleted while we were away
+    if (err.code === 'password-required') return lockOut(); // a password was set, or changed
     if (err.code === 'nesting-limit-reached') return block(`This page is nested too deeply (the limit is ${state.maxDepth} levels), so it can't be edited.`);
     if (err.code === 'invalid-path') return block("This address isn't a valid page.");
     if (err.status === 429) {
@@ -424,7 +430,7 @@ async function update() {
 }
 
 function tick() {
-  if (!state.loaded || state.blocked || state.deleting || state.actionRunning !== null || dialog.open) return;
+  if (!state.loaded || state.blocked || state.locked || state.deleting || state.actionRunning !== null || dialog.open) return;
   const now = Date.now();
   if (now < state.notBefore) return;
 
@@ -450,8 +456,16 @@ function streamClosed() {
   return hasEventSource && (!events || events.readyState === EventSource.CLOSED);
 }
 
+function closeEvents() {
+  clearTimeout(reconnectTimer);
+  if (events) {
+    events.close();
+    events = null;
+  }
+}
+
 function connectEvents() {
-  if (state.deleted) return;
+  if (state.deleted || state.locked) return;
   if (!hasEventSource) {
     state.stream = 'down';
     refreshSync();
@@ -491,8 +505,18 @@ function connectEvents() {
   });
   // Someone deleted the page: the server sends this last and closes the stream.
   events.addEventListener('deleted', () => pageDeleted(state.deleting));
+  // A password was set or changed: the server closes every stream on the page.
+  // Whoever still has the key reconnects; everyone else gets the password screen.
+  events.addEventListener('locked', () => {
+    closeEvents();
+    onLockedNotice();
+  });
+  events.addEventListener('unlocked', () => {
+    setProtected(false);
+    if (!state.unprotecting) toast('The password was removed from this page', { ms: 3000 });
+  });
   events.addEventListener('error', () => {
-    if (state.deleted) return;
+    if (state.deleted || state.locked || !events) return;
     state.live = false;
     state.stream = 'down';
     setPresence(0);
@@ -801,6 +825,234 @@ $('act-theme').addEventListener('click', () => {
   syncThemeItem();
 });
 
+// ---- Password protection ----------------------------------------------------------
+
+const protectDialog = $('protect-dialog');
+const lockedScreen = $('locked');
+let unlockWaiters = [];
+let unlockPoll = null;
+
+const getAccess = () => request(api('access'), { headers: { Accept: 'application/json' } });
+const postJson = (url, data) =>
+  request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(data) });
+
+function setProtected(on) {
+  state.protected = Boolean(on);
+  $('lock-badge').hidden = !state.protected;
+  $('act-protect-label').textContent = state.protected ? 'Change password…' : 'Protect with password…';
+  $('act-unprotect').hidden = !state.protected;
+}
+
+/** Shows the password screen; resolves once the right password was typed. */
+function lockOut({ initial = false } = {}) {
+  const done = new Promise((resolve) => unlockWaiters.push(resolve));
+  if (state.locked) return done;
+  state.locked = true;
+  setProtected(true);
+  closeEvents();
+  closeMenu();
+  for (const d of [dialog, protectDialog, deleteDialog]) if (d.open) d.close();
+  setPresence(0);
+  files?.setEnabled(false);
+  $('menu').replaceChildren();
+
+  // Hide the text: it is only shown again after the password.
+  if (state.loaded) state.stashedText = textarea.value;
+  textarea.value = '';
+  textarea.disabled = true;
+  updateStats();
+  document.body.classList.add('page-locked');
+
+  $('locked-text').textContent = initial
+    ? `Type the password to open ${pagePath}.`
+    : `Someone just set a password on ${pagePath}. Type it to keep working here.`;
+  $('unlock-error').hidden = true;
+  $('unlock-password').value = '';
+  lockedScreen.hidden = false;
+  lockedScreen.classList.remove('opening');
+  requestAnimationFrame(() => lockedScreen.classList.add('show'));
+  setTimeout(() => $('unlock-password').focus(), 50);
+
+  // If the password is removed meanwhile, let them straight in.
+  clearInterval(unlockPoll);
+  unlockPoll = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const access = await getAccess();
+      if (access.access) unlocked();
+    } catch {
+      // try again later
+    }
+  }, 15_000);
+  return done;
+}
+
+function unlocked() {
+  if (!state.locked) return;
+  clearInterval(unlockPoll);
+  lockedScreen.classList.add('opening');
+  setTimeout(() => {
+    lockedScreen.classList.remove('show');
+    setTimeout(() => {
+      lockedScreen.hidden = true;
+      lockedScreen.classList.remove('opening');
+    }, 350);
+
+    state.locked = false;
+    document.body.classList.remove('page-locked');
+    files?.setEnabled(true);
+    getAccess()
+      .then((a) => setProtected(a.protected))
+      .catch(() => {});
+    if (state.loaded) {
+      // Back to where we were; anything that changed meanwhile is merged in.
+      textarea.value = state.stashedText ?? state.savedText;
+      state.stashedText = null;
+      textarea.disabled = false;
+      updateStats();
+      state.notBefore = 0;
+      state.needUpdate = true;
+      connectEvents();
+      files?.refresh();
+      loadMenu();
+      textarea.focus();
+    }
+    const waiters = unlockWaiters;
+    unlockWaiters = [];
+    waiters.forEach((resolve) => resolve());
+  }, 650);
+}
+
+/** After `locked`: do we still have the key (we set the password) or not? */
+async function onLockedNotice() {
+  if (state.locking) {
+    state.lockNoticePending = true; // decide once our own request has returned
+    return;
+  }
+  try {
+    const access = await getAccess();
+    setProtected(access.protected);
+    if (access.access) connectEvents();
+    else lockOut();
+  } catch {
+    // Server unreachable: the normal retry logic reconnects later.
+    reconnectTimer = setTimeout(connectEvents, 3000);
+  }
+}
+
+$('unlock-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const field = $('unlock-password');
+  const error = $('unlock-error');
+  const card = $('unlock-form');
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+    card.classList.remove('shake');
+    void card.offsetWidth;
+    card.classList.add('shake');
+    field.select();
+  };
+  if (!field.value) return fail('Type the password.');
+  $('unlock-submit').disabled = true;
+  try {
+    await postJson(api('unlock'), { password: field.value });
+    error.hidden = true;
+    unlocked();
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 403) fail('Wrong password. Try again.');
+    else if (err instanceof HttpError && err.status === 429) fail('Too many attempts. Wait a minute and try again.');
+    else fail('Could not reach the server. Try again.');
+  } finally {
+    $('unlock-submit').disabled = false;
+  }
+});
+
+for (const toggle of document.querySelectorAll('.pw-toggle')) {
+  toggle.addEventListener('click', () => {
+    const input = $(toggle.dataset.for);
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    if (toggle.dataset.for === 'protect-password') $('protect-confirm').type = input.type;
+    toggle.classList.toggle('on', show);
+    toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    toggle.title = show ? 'Hide password' : 'Show password';
+    input.focus();
+  });
+}
+
+$('act-protect').addEventListener('click', () => {
+  closeMenu();
+  $('protect-title').textContent = state.protected ? 'Change the password' : 'Protect this page with a password';
+  $('protect-path').textContent = pagePath;
+  $('protect-save').textContent = state.protected ? 'Change password' : 'Protect page';
+  const others = state.live ? Math.max(0, state.presence - 1) : 0;
+  $('protect-others').textContent =
+    (others === 0
+      ? ''
+      : `${others === 1 ? '1 other person is' : `${others} other people are`} on this page right now and will need the password to continue. `) +
+    'You stay in. Subpages are not protected.';
+  $('protect-error').hidden = true;
+  for (const id of ['protect-password', 'protect-confirm']) {
+    $(id).value = '';
+    $(id).type = 'password';
+  }
+  protectDialog.showModal();
+  $('protect-password').focus();
+});
+
+$('protect-cancel').addEventListener('click', () => protectDialog.close());
+
+$('protect-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const password = $('protect-password').value;
+  const error = $('protect-error');
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+  };
+  if ([...password].length < 4) return fail('Use at least 4 characters.');
+  if (password !== $('protect-confirm').value) return fail('The two passwords are different.');
+
+  $('protect-save').disabled = true;
+  state.locking = true;
+  try {
+    await postJson(api('lock'), { password });
+    protectDialog.close();
+    setProtected(true);
+    toast('Page protected. Anyone else needs the password to open it.', { kind: 'ok', ms: 3600 });
+  } catch (err) {
+    if (err instanceof HttpError && err.code === 'password-required') {
+      protectDialog.close();
+      lockOut();
+    } else {
+      fail(err instanceof HttpError && err.status === 400 ? 'That password is not allowed. Use 4 to 256 characters.' : 'Could not reach the server. Try again.');
+    }
+  } finally {
+    $('protect-save').disabled = false;
+    state.locking = false;
+    if (state.lockNoticePending) {
+      state.lockNoticePending = false;
+      onLockedNotice();
+    }
+  }
+});
+
+$('act-unprotect').addEventListener('click', async () => {
+  closeMenu();
+  state.unprotecting = true; // our own `unlocked` notice needs no second toast
+  try {
+    await request(api('lock'), { method: 'DELETE', headers: { Accept: 'application/json' } });
+    setProtected(false);
+    toast('Password removed. Anyone with the link can open this page again.', { kind: 'ok', ms: 3600 });
+  } catch (err) {
+    handleFailure(err);
+    if (!state.locked) toast('Could not remove the password. Try again.', { kind: 'error' });
+  } finally {
+    setTimeout(() => (state.unprotecting = false), 1000);
+  }
+});
+
 // ---- Delete the page for everyone ---------------------------------------------------
 
 const deleteDialog = $('delete-dialog');
@@ -991,7 +1243,8 @@ async function firstLoad() {
     } catch (err) {
       handleFailure(err);
       if (state.blocked) return false;
-      await new Promise((r) => setTimeout(r, state.backoffMs));
+      if (state.locked) await lockOut(); // wait for the password
+      else await new Promise((r) => setTimeout(r, state.backoffMs));
     }
   }
 }
@@ -1008,6 +1261,19 @@ async function start() {
   files = createFiles({ encodedPath, request, toast, formatBytes });
   await loadConfig();
   document.title = `${segments[segments.length - 1]} | ${state.appName}`;
+
+  // A protected page asks for the password before anything is loaded.
+  try {
+    const access = await getAccess();
+    setProtected(access.protected);
+    if (!access.access) {
+      setProgress(false);
+      await lockOut({ initial: true });
+      setProgress(true);
+    }
+  } catch {
+    // firstLoad's retries deal with it (and with invalid paths).
+  }
 
   const ok = await firstLoad();
   setProgress(false);

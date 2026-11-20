@@ -33,6 +33,7 @@ docker compose down                 # stop; the data stays in the openpad-data v
 - **Image previews.** A dropped image shows up straight away as a lighter preview (at most 1280 px, made in the uploader's browser) and opens larger on click. **Download original** always returns the exact file that was uploaded, at full quality.
 - **Files are temporary.** They are kept only in the server's memory, never on disk. Each one expires after `FILE_TTL_MS` (6 hours by default), and a restart, crash or redeploy clears them all. The page text itself is stored permanently as before.
 - **Export** as `.txt`, or as a `.zip` with all subpages.
+- **Password-protected pages.** Choose **⋯ → Protect with password…** and set a password. From then on, opening the page asks for it, and a *Protected* badge appears next to the page name. Anyone already on the page is locked out on the spot: the text disappears behind a password screen until they type it. The person who set it stays in. Once the password is typed, that browser stays unlocked for 30 days, or until someone changes the password. **Change password…** locks everyone else out again, and **Remove password** opens the page to anyone with the link. Only this page is protected, not its subpages.
 - **Delete a page for everyone** from the **⋯** menu. Everyone on the page watches the text crumble away and the shared windows fall, then all of them are sent to the home page. The page's text and shared files are deleted; subpages are kept. A browser that was offline at the time can't quietly bring the old text back: it gets the same "This page was deleted" screen when it reconnects. Anyone can still start a new page at that address from scratch.
 - **Your own address.** The first time someone opens the home page, it asks which address people will use, for example `notes.example.com` or `192.168.1.20:3000`. That address is shown in front of the page name on the home page and used by **Copy link**, and it is saved in the database, so it survives restarts and rebuilds.
 - **Keyboard:** Tab inserts a tab, Ctrl/Cmd+S saves right away, and the browser warns before you leave with unsaved text.
@@ -109,6 +110,10 @@ The API lives on the same origin, under `/api`. Every response carries `Cache-Co
 | `GET /api/body/<path>?lastModified=<n>` | Read the text if it changed since `n` | `{"changed": false, "lastModified": n}` or `{"changed": true, "lastModified": m, "body": "..."}` |
 | `POST /api/body/<path>` | Save `text`, `lastModified` and `force` as `x-www-form-urlencoded` | The new `lastModified` as a JSON number |
 | `DELETE /api/body/<path>` | Delete the page and its shared files for everyone; subpages are kept | `{"deleted": true, "existed", "removedFiles", "kicked"}` |
+| `GET /api/access/<path>` | Does the page have a password, and may this browser open it? | `{"protected", "access"}` |
+| `POST /api/unlock/<path>` | Type the password: JSON `{"password"}`. 10 tries per minute per IP | `{"access": true}` and an access cookie, or 403 `wrong-password` |
+| `POST /api/lock/<path>` | Set or change the password: JSON `{"password"}`, 4 to 256 characters. Everyone else on the page is disconnected with a `locked` event | `{"protected": true}` and an access cookie |
+| `DELETE /api/lock/<path>` | Remove the password | `{"protected": false}` |
 | `POST /api/setup` | First-run setup: JSON `{"address": "notes.example.com"}`. Works only once | `{"publicAddress", "host"}` |
 | `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}`, `deleted` (the last event before the stream closes), `file-added` with the file, `file-moved` with `{"id", "x", "y", "z"}`, `file-removed` with `{"id"}` |
 | `GET /api/files/<path>` | The page's shared files | An array of `{"id", "name", "type", "size", "x", "y", "z", "expiresAt", "preview", ...}` |
@@ -132,6 +137,7 @@ Errors when saving:
 | Invalid or reserved path | 400 | `{"error":"invalid-path"}` |
 | Rate limit exceeded | 429 | `{"error":"rate-limited"}` |
 | The page was deleted (in the last 15 minutes) after this version was loaded | 410 | `{"error":"page-deleted"}` |
+| The page has a password and this browser hasn't typed it (any route for that page, its files and its live updates) | 401 | `{"error":"password-required"}` |
 
 Errors when sharing a file:
 
@@ -181,7 +187,17 @@ To restore: `docker compose down`, copy the file into the volume as `openpad.db`
 
 ## Security
 
-As with the original, anyone who knows a URL can read, write and delete it: the page name is the only secret. Use names that are hard to guess, such as the ones from **Random page**. The measures below protect the service, not the content.
+As with the original, anyone who knows a URL can read, write and delete it: the page name is the only secret. The exception is a page with a password.
+
+Page passwords:
+
+- Passwords are stored only as scrypt hashes, with a random salt for each one.
+- Typing the password gives that browser an access key for the page, in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` over HTTPS). The key is an HMAC of the page path, signed with a random secret kept in the database.
+- Setting a new password invalidates every key issued before.
+- Without the key, the page's text, live updates, shared files, subpage list and `.zip` export all answer 401. A parent's `.zip` leaves out protected subpages that browser hasn't unlocked.
+- Wrong guesses are limited to 10 per minute per IP.
+- The text is not encrypted in the database. Anyone with access to the server or its backups can read it.
+- Use HTTPS when the server is reachable from the internet. Over plain HTTP, the password and the cookie travel unencrypted. Use names that are hard to guess, such as the ones from **Random page**. The measures below protect the service, not the content.
 
 - Page text only reaches the DOM through `textarea.value` and `textContent`, never `innerHTML`.
 - Prepared statements with parameters only.

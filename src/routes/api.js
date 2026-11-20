@@ -2,6 +2,7 @@
 
 import rateLimit from '@fastify/rate-limit';
 import { FileStore, MAX_PREVIEW_BYTES } from '../files.js';
+import { MAX_PASSWORD, validPassword } from '../locks.js';
 import { parsePath } from '../paths.js';
 import { buildZip } from '../zip.js';
 
@@ -23,7 +24,7 @@ function apiError(code, error) {
   return Object.assign(new Error(error), { statusCode: code, apiError: error });
 }
 
-export default async function apiRoutes(app, { config, db, hub, files, address }) {
+export default async function apiRoutes(app, { config, db, hub, files, address, locks }) {
   await app.register(rateLimit, {
     max: config.rateLimitPerMin,
     timeWindow: 60_000,
@@ -47,6 +48,15 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
     if (!result.ok) throw apiError(400, result.error);
     return result.path;
   };
+
+  // Password-protected pages answer 401 until the browser has the page's key.
+  const guard = (request, p) => {
+    if (!locks.hasAccess(request, p)) throw apiError(401, 'password-required');
+    return p;
+  };
+  const resolveGuarded = (request, prefix) => guard(request, resolve(request, prefix));
+  const secure = (request) => request.protocol === 'https';
+  const passwordFrom = (request) => (typeof request.body?.password === 'string' ? request.body.password : null);
 
   app.get('/api/config', async () => ({
     appName: config.appName,
@@ -86,7 +96,7 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
 
   // Read: only sends the text when it changed since lastModified (0 always asks for it).
   app.get('/api/body/*', async (request) => {
-    const p = resolve(request, '/api/body');
+    const p = resolveGuarded(request, '/api/body');
     const sent = Number(request.query.lastModified ?? 0);
     if (wasDeleted(p, sent)) throw apiError(410, 'page-deleted');
     const page = db.read(p);
@@ -98,7 +108,7 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
 
   // Save: optimistic concurrency control on lastModified.
   app.post('/api/body/*', async (request, reply) => {
-    const p = resolve(request, '/api/body');
+    const p = resolveGuarded(request, '/api/body');
     const form = request.body ?? {};
     const text = typeof form.text === 'string' ? form.text : '';
     const sent = Number(form.lastModified ?? 0);
@@ -118,11 +128,12 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
 
   // Delete the page for everyone: its text and its shared files. Everyone on it
   // gets `deleted` and is sent back to the home page. Subpages are kept.
-  app.delete('/api/body/*', async (request) => {
-    const p = resolve(request, '/api/body');
+  app.delete('/api/body/*', async (request, reply) => {
+    const p = resolveGuarded(request, '/api/body');
     const existed = db.read(p).lastModified !== 0;
     db.save(p, '', 0, true);
     const removedFiles = files.removePage(p).length;
+    if (locks.isProtected(p)) reply.header('Set-Cookie', locks.remove(p, { secure: secure(request) }));
     const now = Date.now();
     for (const [path, at] of deleted) if (now - at > DELETED_MEMORY_MS) deleted.delete(path);
     deleted.set(p, now);
@@ -132,9 +143,54 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
     return { deleted: true, existed, removedFiles, kicked };
   });
 
+  // ---- Password protection -------------------------------------------------------
+
+  // Whether a page has a password, and whether this browser may open it.
+  app.get('/api/access/*', async (request) => {
+    const p = resolve(request, '/api/access');
+    return { protected: locks.isProtected(p), access: locks.hasAccess(request, p) };
+  });
+
+  // Typing the password: a few tries per minute per IP, on top of scrypt's cost.
+  app.post('/api/unlock/*', { config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (request, reply) => {
+    const p = resolve(request, '/api/unlock');
+    const password = passwordFrom(request);
+    if (password === null || password.length > MAX_PASSWORD) throw apiError(400, 'invalid-password');
+    const cookie = await locks.unlock(p, password, { secure: secure(request) });
+    if (cookie === null) {
+      request.log.info('wrong page password');
+      throw apiError(403, 'wrong-password');
+    }
+    if (cookie) reply.header('Set-Cookie', cookie);
+    return { access: true };
+  });
+
+  // Set or change the password. Whoever sets it keeps access; everyone else on
+  // the page is disconnected with `locked` and must type it to come back.
+  app.post('/api/lock/*', { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (request, reply) => {
+    const p = resolveGuarded(request, '/api/lock');
+    const password = passwordFrom(request);
+    if (!validPassword(password)) throw apiError(400, 'invalid-password');
+    const cookie = await locks.protect(p, password, { secure: secure(request) });
+    reply.header('Set-Cookie', cookie);
+    const disconnected = hub.finish(p, 'locked', {});
+    request.log.info({ disconnected }, 'page protected');
+    return { protected: true };
+  });
+
+  // Remove the password (only someone who has access can).
+  app.delete('/api/lock/*', async (request, reply) => {
+    const p = resolveGuarded(request, '/api/lock');
+    if (locks.isProtected(p)) {
+      reply.header('Set-Cookie', locks.remove(p, { secure: secure(request) }));
+      hub.publish(p, 'unlocked', {});
+    }
+    return { protected: false };
+  });
+
   // Live updates (Server-Sent Events): `hello`, `change` and `presence`.
   app.get('/api/events/*', async (request, reply) => {
-    const p = resolve(request, '/api/events');
+    const p = resolveGuarded(request, '/api/events');
     if (!hub.canAccept(request.ip)) throw apiError(429, 'too-many-streams');
 
     reply.hijack();
@@ -153,13 +209,17 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
   });
 
   // Direct subpages only, in no particular order.
-  app.get('/api/menu/*', async (request) => db.menu(resolve(request, '/api/menu')));
+  app.get('/api/menu/*', async (request) => db.menu(resolveGuarded(request, '/api/menu')));
 
   // The page and its subpages, one .txt per page.
   app.get('/api/zip/*', async (request, reply) => {
-    const p = resolve(request, '/api/zip');
+    const p = resolveGuarded(request, '/api/zip');
     const base = p.slice(0, p.lastIndexOf('/') + 1); // "/notes/" for "/notes/meeting"
-    const files = db.tree(p).map((row) => ({ name: row.path.slice(base.length) + '.txt', data: row.body }));
+    // Protected subpages are left out unless this browser has unlocked them.
+    const files = db
+      .tree(p)
+      .filter((row) => row.path === p || locks.hasAccess(request, row.path))
+      .map((row) => ({ name: row.path.slice(base.length) + '.txt', data: row.body }));
     const leaf = p.slice(base.length);
     const ascii = leaf.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     reply
@@ -170,11 +230,11 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
 
   // ---- Temporary shared files (memory only) ----------------------------------
 
-  app.get('/api/files/*', async (request) => files.list(resolve(request, '/api/files')));
+  app.get('/api/files/*', async (request) => files.list(resolveGuarded(request, '/api/files')));
 
   // Body: [preview bytes][original bytes]. Headers describe both parts.
   app.post('/api/files/*', async (request, reply) => {
-    const p = resolve(request, '/api/files');
+    const p = resolveGuarded(request, '/api/files');
     if (!Buffer.isBuffer(request.body)) throw apiError(415, 'unsupported-media-type');
     const h = request.headers;
     const body = request.body;
@@ -222,6 +282,7 @@ export default async function apiRoutes(app, { config, db, hub, files, address }
     const id = request.params.id;
     const file = UUID.test(id) ? files.get(id) : null;
     if (!file) throw apiError(404, 'file-not-found');
+    guard(request, file.path);
     return file;
   };
 

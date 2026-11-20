@@ -12,6 +12,15 @@ const SCHEMA = `
     last_modified INTEGER NOT NULL
   ) WITHOUT ROWID;
 
+  -- Password-protected pages. hash is scrypt; nonce changes with every new
+  -- password, so access keys issued for an older password stop working.
+  CREATE TABLE IF NOT EXISTS page_locks (
+    path       TEXT PRIMARY KEY,
+    hash       TEXT NOT NULL,
+    nonce      TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -60,6 +69,12 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
     insertSetting: db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING'),
     putSetting: db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
     deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
+    getLock: db.prepare('SELECT hash, nonce FROM page_locks WHERE path = ?'),
+    putLock: db.prepare(`
+      INSERT INTO page_locks (path, hash, nonce, created_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET hash = excluded.hash, nonce = excluded.nonce, created_at = excluded.created_at
+    `),
+    deleteLock: db.prepare('DELETE FROM page_locks WHERE path = ?'),
   };
 
   /** A page that does not exist behaves as body "" and lastModified 0. */
@@ -93,6 +108,9 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
     insertSetting: (key, value) => stmt.insertSetting.run(key, value).changes === 1,
     putSetting: (key, value) => void stmt.putSetting.run(key, value),
     deleteSetting: (key) => stmt.deleteSetting.run(key).changes === 1,
+    getLock: (p) => stmt.getLock.get(p) ?? null,
+    putLock: (p, hash, nonce) => void stmt.putLock.run(p, hash, nonce, now()),
+    deleteLock: (p) => stmt.deleteLock.run(p).changes === 1,
     healthy() {
       try {
         return stmt.ping.get() === 1;

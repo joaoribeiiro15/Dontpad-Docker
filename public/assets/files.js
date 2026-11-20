@@ -645,7 +645,8 @@ export function createFiles({ encodedPath, request, toast, formatBytes }) {
 
   // ---- Drag and drop onto the page -------------------------------------------------
 
-  const hasFiles = (e) => Boolean(e.dataTransfer) && [...e.dataTransfer.types].includes('Files');
+  let enabled = true; // false while the page is locked (password screen)
+  const hasFiles = (e) => enabled && Boolean(e.dataTransfer) && [...e.dataTransfer.types].includes('Files');
   let dragDepth = 0;
 
   function moveLanding(e) {
@@ -695,14 +696,16 @@ export function createFiles({ encodedPath, request, toast, formatBytes }) {
   // Paste files (e.g. a screenshot) straight onto the page.
   document.addEventListener('paste', (e) => {
     const files = e.clipboardData ? [...e.clipboardData.files] : [];
-    if (files.length === 0) return;
+    if (files.length === 0 || !enabled) return;
     e.preventDefault();
     uploadMany(files);
   });
 
   // Paperclip button.
   const input = document.getElementById('file-input');
-  document.getElementById('attach-btn').addEventListener('click', () => input.click());
+  document.getElementById('attach-btn').addEventListener('click', () => {
+    if (enabled) input.click();
+  });
   input.addEventListener('change', () => {
     if (input.files.length) uploadMany(input.files);
     input.value = '';
@@ -764,6 +767,14 @@ export function createFiles({ encodedPath, request, toast, formatBytes }) {
   return {
     attach,
     refresh,
+    /** Locked out: the windows go away and nothing can be shared until unlocked. */
+    setEnabled(on) {
+      enabled = on;
+      if (!on) {
+        closeLightbox();
+        for (const id of [...windows.keys()]) removeWindow(id);
+      }
+    },
     setLimits(cfg) {
       if (Number.isFinite(cfg.maxFileBytes)) limits.maxFileBytes = cfg.maxFileBytes;
       if (Number.isFinite(cfg.maxFilesPerPage)) limits.maxFilesPerPage = cfg.maxFilesPerPage;

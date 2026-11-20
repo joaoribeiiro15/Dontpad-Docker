@@ -22,6 +22,10 @@
           <span class="brand-name">{{APP_NAME}}</span>
         </a>
         <nav id="crumbs" class="crumbs" aria-label="Page path"></nav>
+        <span id="lock-badge" class="lock-badge" hidden title="Protected with a password">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+          <span class="lock-badge-label">Protected</span>
+        </span>
       </div>
 
       <div class="topbar-right">
@@ -87,6 +91,14 @@
               <span class="hint" id="theme-name">System</span>
             </button>
             <div class="popover-sep" role="separator"></div>
+            <button class="popover-item" role="menuitem" type="button" id="act-protect">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+              <span id="act-protect-label">Protect with password…</span>
+            </button>
+            <button class="popover-item" role="menuitem" type="button" id="act-unprotect" hidden>
+              <svg class="icon" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 7.5-2" /></svg>
+              Remove password
+            </button>
             <button class="popover-item danger" role="menuitem" type="button" id="act-delete">
               <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" /><path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" /></svg>
               Delete page…
@@ -196,6 +208,67 @@
         <button id="delete-confirm" type="button" class="btn btn-danger">Delete page</button>
       </div>
     </dialog>
+
+    <dialog id="protect-dialog" class="modal" aria-labelledby="protect-title">
+      <form id="protect-form" method="dialog" autocomplete="off" novalidate>
+        <div class="modal-body">
+          <div class="modal-icon lock">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+          </div>
+          <h2 id="protect-title">Protect this page with a password</h2>
+          <p id="protect-text">From now on, opening <strong id="protect-path"></strong> asks for this password.</p>
+          <div class="pw-field">
+            <label for="protect-password">Password</label>
+            <div class="pw-input">
+              <input id="protect-password" type="password" autocomplete="new-password" minlength="4" maxlength="256" />
+              <button type="button" class="pw-toggle" data-for="protect-password" aria-label="Show password" title="Show password">
+                <svg class="icon eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+          </div>
+          <div class="pw-field">
+            <label for="protect-confirm">Type it again</label>
+            <div class="pw-input">
+              <input id="protect-confirm" type="password" autocomplete="new-password" maxlength="256" />
+            </div>
+          </div>
+          <p id="protect-others" class="modal-note"></p>
+          <p id="protect-error" class="form-error" hidden></p>
+        </div>
+        <div class="modal-actions">
+          <button id="protect-cancel" type="button" class="btn">Cancel</button>
+          <button id="protect-save" type="submit" class="btn btn-primary">Protect page</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="locked" class="locked" hidden role="dialog" aria-modal="true" aria-labelledby="locked-title">
+      <form id="unlock-form" class="locked-card" autocomplete="off" novalidate>
+        <div class="padlock" aria-hidden="true">
+          <svg viewBox="0 0 48 48">
+            <path class="shackle" d="M15 22v-6a9 9 0 0 1 18 0v6" />
+            <rect class="lock-body" x="9" y="21" width="30" height="22" rx="6" />
+            <circle class="keyhole" cx="24" cy="31" r="2.6" />
+            <path class="keyhole" d="M24 33v4" />
+          </svg>
+        </div>
+        <h2 id="locked-title">This page is protected</h2>
+        <p id="locked-text" class="locked-text"></p>
+        <div class="pw-input big">
+          <label for="unlock-password" class="visually-hidden">Password</label>
+          <input id="unlock-password" type="password" autocomplete="current-password" placeholder="Password" maxlength="256" />
+          <button type="button" class="pw-toggle" data-for="unlock-password" aria-label="Show password" title="Show password">
+            <svg class="icon eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+          </button>
+        </div>
+        <p id="unlock-error" class="form-error" hidden></p>
+        <button id="unlock-submit" type="submit" class="btn btn-primary unlock-btn">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 7.5-2" /></svg>
+          Unlock
+        </button>
+        <a href="/" class="locked-home">Back to the home page</a>
+      </form>
+    </div>
 
     <div id="deleted" class="deleted" hidden role="alertdialog" aria-labelledby="deleted-title" aria-describedby="deleted-text">
       <div class="deleted-card">
