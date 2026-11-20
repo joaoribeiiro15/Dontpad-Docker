@@ -33,6 +33,8 @@ docker compose down                 # stop; the data stays in the openpad-data v
 - **Image previews.** A dropped image shows up straight away as a lighter preview (at most 1280 px, made in the uploader's browser) and opens larger on click. **Download original** always returns the exact file that was uploaded, at full quality.
 - **Files are temporary.** They are kept only in the server's memory, never on disk. Each one expires after `FILE_TTL_MS` (6 hours by default), and a restart, crash or redeploy clears them all. The page text itself is stored permanently as before.
 - **Export** as `.txt`, or as a `.zip` with all subpages.
+- **Delete a page for everyone** from the **⋯** menu. Everyone on the page watches the text crumble away and the shared windows fall, then all of them are sent to the home page. The page's text and shared files are deleted; subpages are kept. A browser that was offline at the time can't quietly bring the old text back: it gets the same "This page was deleted" screen when it reconnects. Anyone can still start a new page at that address from scratch.
+- **Your own address.** The first time someone opens the home page, it asks which address people will use, for example `notes.example.com` or `192.168.1.20:3000`. That address is shown in front of the page name on the home page and used by **Copy link**, and it is saved in the database, so it survives restarts and rebuilds.
 - **Keyboard:** Tab inserts a tab, Ctrl/Cmd+S saves right away, and the browser warns before you leave with unsaved text.
 
 ## Configuration
@@ -44,6 +46,7 @@ Every variable is optional. With Compose, copy `.env.example` to `.env` and chan
 | `HOST_PORT` | `3000` | Port published on the host (Compose only) |
 | `PORT` | `3000` | HTTP port inside the container |
 | `APP_NAME` | `openpad` | Name on the home page and in tab titles |
+| `PUBLIC_ADDRESS` | *(empty)* | Fixed public address, such as `notes.example.com`. When set, the first-run question is skipped and this value always wins |
 | `DB_PATH` | `/data/openpad.db` | SQLite file |
 | `SYNC_INTERVAL_MS` | `5000` | Fallback polling interval while the live connection is down |
 | `REQUEST_TIMEOUT_MS` | `10000` | Browser request timeout |
@@ -61,6 +64,18 @@ Every variable is optional. With Compose, copy `.env.example` to `.env` and chan
 Someone typing non-stop sends about one save per second. The default rate limit leaves plenty of room for several tabs behind the same IP address.
 
 Shared files live in the process's memory, so give the container at least `MAX_FILES_TOTAL_BYTES` plus about 100 MB of RAM.
+
+### Public address
+
+On a fresh install the home page asks for the address once. Without a scheme, local names and IP addresses get `http://` and domains get `https://`. You can also type the scheme yourself. To see or change it later:
+
+```bash
+docker compose exec openpad node src/cli.js address                     # show it
+docker compose exec openpad node src/cli.js address notes.example.com   # change it
+docker compose exec openpad node src/cli.js address --reset             # ask again on the home page
+```
+
+Until someone answers, anyone who opens the home page can set the address, so answer it right after the first `docker compose up`, or set `PUBLIC_ADDRESS` in `.env`.
 
 ## Exposing it to the internet
 
@@ -93,7 +108,9 @@ The API lives on the same origin, under `/api`. Every response carries `Cache-Co
 | --- | --- | --- |
 | `GET /api/body/<path>?lastModified=<n>` | Read the text if it changed since `n` | `{"changed": false, "lastModified": n}` or `{"changed": true, "lastModified": m, "body": "..."}` |
 | `POST /api/body/<path>` | Save `text`, `lastModified` and `force` as `x-www-form-urlencoded` | The new `lastModified` as a JSON number |
-| `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}`, `file-added` with the file, `file-moved` with `{"id", "x", "y", "z"}`, `file-removed` with `{"id"}` |
+| `DELETE /api/body/<path>` | Delete the page and its shared files for everyone; subpages are kept | `{"deleted": true, "existed", "removedFiles", "kicked"}` |
+| `POST /api/setup` | First-run setup: JSON `{"address": "notes.example.com"}`. Works only once | `{"publicAddress", "host"}` |
+| `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}`, `deleted` (the last event before the stream closes), `file-added` with the file, `file-moved` with `{"id", "x", "y", "z"}`, `file-removed` with `{"id"}` |
 | `GET /api/files/<path>` | The page's shared files | An array of `{"id", "name", "type", "size", "x", "y", "z", "expiresAt", "preview", ...}` |
 | `POST /api/files/<path>?x=&y=` | Share a file. The body is the raw bytes (`application/octet-stream`). The name goes in `X-File-Name`, URI-encoded, and the type in `X-File-Type`. `x` and `y` are fractions from 0 to 1 | 201 with the file |
 | `GET /api/file/<id>` | Download the original, byte for byte | `application/octet-stream`, as an attachment |
@@ -102,7 +119,7 @@ The API lives on the same origin, under `/api`. Every response carries `Cache-Co
 | `DELETE /api/file/<id>` | Remove a file for everyone | `{"removed": id}` |
 | `GET /api/menu/<path>` | Direct subpages | `["meeting", "shopping"]`, unordered |
 | `GET /api/zip/<path>` | The page and its subpages, one `.txt` each | `application/zip` |
-| `GET /api/config` | Browser configuration | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes", "maxDepth", "maxFileBytes", "maxFilesPerPage", "fileTtlMs"}` |
+| `GET /api/config` | Browser configuration | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes", "maxDepth", "maxFileBytes", "maxFilesPerPage", "fileTtlMs", "publicAddress"}` |
 | `GET /healthz` | Health check | `{"status": "ok"}` |
 
 Errors when saving:
@@ -114,6 +131,7 @@ Errors when saving:
 | Path nested too deeply | 400 | `{"error":"nesting-limit-reached"}` |
 | Invalid or reserved path | 400 | `{"error":"invalid-path"}` |
 | Rate limit exceeded | 429 | `{"error":"rate-limited"}` |
+| The page was deleted (in the last 15 minutes) after this version was loaded | 410 | `{"error":"page-deleted"}` |
 
 Errors when sharing a file:
 
@@ -163,7 +181,7 @@ To restore: `docker compose down`, copy the file into the volume as `openpad.db`
 
 ## Security
 
-As with the original, anyone who knows a URL can read and write it: the page name is the only secret. Use names that are hard to guess, such as the ones from **Random page**. The measures below protect the service, not the content.
+As with the original, anyone who knows a URL can read, write and delete it: the page name is the only secret. Use names that are hard to guess, such as the ones from **Random page**. The measures below protect the service, not the content.
 
 - Page text only reaches the DOM through `textarea.value` and `textContent`, never `innerHTML`.
 - Prepared statements with parameters only.

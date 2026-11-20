@@ -261,7 +261,9 @@ test('menu: copy link, theme and monospace preferences', async ({ page, context 
   await expect(page.locator('#menu-pop')).toBeVisible();
   await page.locator('#act-copy').click();
   await expect(page.locator('.toast')).toContainText('Link copied');
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(new URL(path, page.url()).href);
+  // The link uses the configured public address (PUBLIC_ADDRESS or first-run setup).
+  const cfg = await (await page.request.get('/api/config')).json();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe((cfg.publicAddress ?? new URL(page.url()).origin) + path);
 
   await page.locator('#menu-btn').click();
   await page.locator('#act-theme').click();
@@ -420,9 +422,9 @@ test('the paperclip shares any file; late joiners see it too', async ({ browser 
 });
 
 /** Starts a dedicated server, so the test can stop and restart it. */
-function startServer(port, dbPath) {
+function startServer(port, dbPath, extraEnv = {}) {
   const child = spawn(process.execPath, ['src/server.js'], {
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DB_PATH: dbPath, SYNC_INTERVAL_MS: String(POLL), LOG_LEVEL: 'warn' },
+    env: { ...process.env, PUBLIC_ADDRESS: '', PORT: String(port), HOST: '127.0.0.1', DB_PATH: dbPath, SYNC_INTERVAL_MS: String(POLL), LOG_LEVEL: 'warn', ...extraEnv },
     stdio: 'ignore',
   });
   const ready = (async () => {
@@ -469,4 +471,96 @@ test('with the server down: offline and not-saved indicators, then saves when it
   const body = await (await fetch(`http://127.0.0.1:${port}/api/body/offline?lastModified=0`)).json();
   expect(body.body).toBe('written while the server was down');
   await server.stop();
+});
+
+test('first-run setup asks for the address once and remembers it across restarts', async ({ page }) => {
+  test.skip(Boolean(process.env.BASE_URL), 'needs a fresh server');
+  const port = 3997;
+  const dbPath = nodePath.join(os.tmpdir(), `openpad-setup-${Date.now()}.db`);
+  let server = startServer(port, dbPath);
+  await server.ready;
+  const home = `http://127.0.0.1:${port}/`;
+
+  await page.goto(home);
+  const setup = page.locator('#setup');
+  await expect(setup).toBeVisible();
+  await expect(page.locator('#setup-address')).toBeFocused();
+  await expect(page.locator('#setup-address')).toHaveValue(`127.0.0.1:${port}`);
+  await expect(page.locator('#setup-link')).toHaveText(`http://127.0.0.1:${port}/your-secret-page`);
+
+  await page.locator('#setup-address').fill('notes.example.com/some/path');
+  await expect(page.locator('#setup-link')).toContainText('does not look like an address');
+  await page.locator('#setup-address').fill('notes.example.com');
+  await expect(page.locator('#setup-link')).toHaveText('https://notes.example.com/your-secret-page');
+  await page.locator('#setup-save').click();
+  await expect(setup).toBeHidden();
+  await expect(page.locator('#host-label')).toHaveText('notes.example.com/');
+
+  // Only once: a second setup is refused.
+  const again = await page.request.post(`${home}api/setup`, { data: { address: 'evil.example.com' } });
+  expect(again.status()).toBe(409);
+
+  // Remembered after a restart (it lives in the database on the /data volume).
+  await server.stop();
+  server = startServer(port, dbPath);
+  await server.ready;
+  await page.goto(home);
+  await expect(page.locator('#host-label')).toHaveText('notes.example.com/');
+  await expect(setup).toBeHidden();
+  await expect(page.locator('#name')).toBeFocused();
+  const cfg = await (await page.request.get(`${home}api/config`)).json();
+  expect(cfg.publicAddress).toBe('https://notes.example.com');
+  await server.stop();
+});
+
+test('deleting a page kicks everyone on it back to the home page', async ({ browser, request }) => {
+  const path = `/${unique('doomed')}`;
+  await seed(request, path, 'line one\nline two\nsome words that will fall away');
+  await seed(request, `${path}/child`, 'a subpage survives');
+  const upload = await request.post(`/api/files${path}`, {
+    headers: { 'content-type': 'application/octet-stream', 'x-file-name': 'notes.txt', 'x-file-type': 'text/plain' },
+    data: Buffer.from('temporary'),
+  });
+  expect(upload.status()).toBe(201);
+
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await openPad(ctxA, path);
+  const b = await openPad(ctxB, path);
+  await expect(a.locator('#presence-count')).toHaveText('2');
+  await expect(b.locator('.file-win')).toHaveCount(1);
+  const staleVersion = await b.evaluate(async (p) => (await (await fetch(`/api/body${p}?lastModified=0`)).json()).lastModified, path);
+
+  await a.locator('#menu-btn').click();
+  await a.locator('#act-delete').click();
+  await expect(a.locator('#delete-dialog')).toBeVisible();
+  await expect(a.locator('#delete-path')).toHaveText(path);
+  await expect(a.locator('#delete-others')).toContainText('1 other person');
+  await a.locator('#delete-confirm').click();
+
+  // Both see the deletion, with the right message, then land on the home page.
+  for (const [page, who] of [[a, 'You deleted it'], [b, 'Someone deleted it']]) {
+    await expect(page.locator('body')).toHaveClass(/page-deleting/);
+    await expect(page.locator('#deleted')).toBeVisible();
+    await expect(page.locator('#deleted-text')).toContainText(who);
+  }
+  await expect(b.locator('.crumble span.fall').first()).toBeAttached();
+  await expect(a).toHaveURL(/\/$/, { timeout: 8000 });
+  await expect(b).toHaveURL(/\/$/, { timeout: 8000 });
+  await expect(b.locator('#recent-list a', { hasText: path })).toHaveCount(0);
+
+  // Gone on the server: text and files. The subpage is kept.
+  const body = await (await request.get(`/api/body${path}?lastModified=0`)).json();
+  expect(body).toMatchObject({ lastModified: 0, body: '' });
+  expect(await (await request.get(`/api/files${path}`)).json()).toEqual([]);
+  expect((await (await request.get(`/api/body${path}/child?lastModified=0`)).json()).body).toBe('a subpage survives');
+
+  // A browser that still holds the old version can't quietly bring it back...
+  const stale = await request.post(`/api/body${path}`, { form: { text: 'zombie', lastModified: String(staleVersion), force: 'true' } });
+  expect(stale.status()).toBe(410);
+  // ...but anyone can start the page again from scratch.
+  await seed(request, path, 'a fresh start');
+
+  await ctxA.close();
+  await ctxB.close();
 });

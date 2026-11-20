@@ -5,7 +5,7 @@ const RECENT_KEY = 'openpad:recent';
 const form = document.getElementById('go-form');
 const input = document.getElementById('name');
 
-document.getElementById('host-label').textContent = `${location.host}/`;
+const hostLabel = document.getElementById('host-label');
 
 function pathFor(name) {
   const segments = name.split('/').map((s) => s.trim()).filter((s) => s !== '');
@@ -89,5 +89,134 @@ document.getElementById('recent-clear').addEventListener('click', () => {
   renderRecent();
 });
 
+// ---- First-run setup: the address people use to reach this server ----------
+
+const LATER_KEY = 'openpad:setup-later';
+const LOCAL_HOST = /^(localhost|\[[0-9a-f:.]+\]|\d{1,3}(\.\d{1,3}){3})$|\.(local|lan|home|internal|localhost)$/i;
+
+/** Mirrors the server's normalization, for the live preview only. */
+function previewOrigin(raw) {
+  let value = raw.trim();
+  if (!value) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    const hostPart = value.split(/[/?#]/)[0].replace(/:\d+$/, '');
+    value = `${LOCAL_HOST.test(hostPart) ? 'http' : 'https'}://${value}`;
+  }
+  try {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol) || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash || url.username) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function setupLater() {
+  try {
+    return sessionStorage.getItem(LATER_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function startSetup() {
+  const overlay = document.getElementById('setup');
+  const form = document.getElementById('setup-form');
+  const field = document.getElementById('setup-address');
+  const link = document.getElementById('setup-link');
+  const error = document.getElementById('setup-error');
+  const save = document.getElementById('setup-save');
+
+  field.value = location.host;
+
+  function renderPreview() {
+    const url = previewOrigin(field.value);
+    field.classList.toggle('invalid', Boolean(field.value.trim()) && !url);
+    link.replaceChildren();
+    if (!url) {
+      link.textContent = field.value.trim() ? 'That does not look like an address.' : 'Links will look like this.';
+      return;
+    }
+    const strong = document.createElement('b');
+    strong.textContent = url.host;
+    link.append(`${url.protocol}//`, strong, '/your-secret-page');
+  }
+
+  function close() {
+    overlay.classList.add('leaving');
+    overlay.classList.remove('show');
+    setTimeout(() => {
+      overlay.hidden = true;
+      overlay.classList.remove('leaving');
+      input.focus();
+    }, 350);
+  }
+
+  function fail(message) {
+    error.textContent = message;
+    error.hidden = false;
+    form.classList.remove('shake');
+    void form.offsetWidth;
+    form.classList.add('shake');
+    field.focus();
+  }
+
+  field.addEventListener('input', () => {
+    error.hidden = true;
+    renderPreview();
+  });
+
+  document.getElementById('setup-later').addEventListener('click', () => {
+    try {
+      sessionStorage.setItem(LATER_KEY, '1');
+    } catch {
+      // ignore
+    }
+    close();
+  });
+
+  overlay.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') document.getElementById('setup-later').click();
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!previewOrigin(field.value)) return fail('Type a domain or an IP address, for example notes.example.com or 192.168.1.20:3000.');
+    save.disabled = true;
+    try {
+      const res = await fetch('/api/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ address: field.value.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        hostLabel.textContent = `${data.host}/`;
+        hostLabel.classList.add('updated');
+        document.body.dataset.setup = 'done';
+        close();
+        return;
+      }
+      if (data.error === 'already-configured' || data.error === 'configured-by-env') {
+        // Someone else finished the setup first: show what is stored now.
+        location.reload();
+        return;
+      }
+      fail(data.error === 'invalid-address' ? 'The server did not accept that address. Use only a domain or IP, with an optional port.' : 'Could not save the address. Try again.');
+    } catch {
+      fail('Could not reach the server. Try again.');
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  renderPreview();
+  overlay.hidden = false;
+  requestAnimationFrame(() => overlay.classList.add('show'));
+  field.focus();
+  field.select();
+}
+
 renderRecent();
-input.focus();
+if (document.body.dataset.setup === 'required' && !setupLater()) startSetup();
+else input.focus();

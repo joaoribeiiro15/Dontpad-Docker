@@ -11,6 +11,11 @@ const SCHEMA = `
     body          TEXT NOT NULL,
     last_modified INTEGER NOT NULL
   ) WITHOUT ROWID;
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  ) WITHOUT ROWID;
 `;
 
 // First segment below :p, even when only a deeper descendant exists. The range
@@ -51,6 +56,10 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
     menu: db.prepare(MENU_SQL).pluck(),
     tree: db.prepare(TREE_SQL),
     ping: db.prepare('SELECT 1').pluck(),
+    getSetting: db.prepare('SELECT value FROM settings WHERE key = ?').pluck(),
+    insertSetting: db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING'),
+    putSetting: db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
+    deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
   };
 
   /** A page that does not exist behaves as body "" and lastModified 0. */
@@ -79,6 +88,11 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
     save: (p, body, clientLastModified, force) => saveTx(p, body, clientLastModified, force),
     menu: (p) => stmt.menu.all({ p }),
     tree: (p) => stmt.tree.all({ p }),
+    getSetting: (key) => stmt.getSetting.get(key) ?? null,
+    /** Stores the value only if the key has none yet; true when it was stored. */
+    insertSetting: (key, value) => stmt.insertSetting.run(key, value).changes === 1,
+    putSetting: (key, value) => void stmt.putSetting.run(key, value),
+    deleteSetting: (key) => stmt.deleteSetting.run(key).changes === 1,
     healthy() {
       try {
         return stmt.ping.get() === 1;

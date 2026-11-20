@@ -23,7 +23,7 @@ function apiError(code, error) {
   return Object.assign(new Error(error), { statusCode: code, apiError: error });
 }
 
-export default async function apiRoutes(app, { config, db, hub, files }) {
+export default async function apiRoutes(app, { config, db, hub, files, address }) {
   await app.register(rateLimit, {
     max: config.rateLimitPerMin,
     timeWindow: 60_000,
@@ -57,12 +57,38 @@ export default async function apiRoutes(app, { config, db, hub, files }) {
     maxFileBytes: config.maxFileBytes,
     maxFilesPerPage: config.maxFilesPerPage,
     fileTtlMs: config.fileTtlMs,
+    publicAddress: address.get()?.origin ?? null,
   }));
+
+  // First-run setup: the address people use to reach this server. Stored once,
+  // in the database, so it survives restarts and rebuilds.
+  app.post('/api/setup', { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (request) => {
+    const result = address.setOnce(request.body?.address);
+    if (!result.ok) throw apiError(result.error === 'invalid-address' ? 400 : 409, result.error);
+    request.log.info('public address configured');
+    return { publicAddress: result.origin, host: result.host };
+  });
+
+  // Deleted pages: for a while, a browser that still holds the old text (it was
+  // offline, or missed the live event) gets 410 instead of quietly re-creating
+  // the page. New visitors (lastModified 0) can start it again from scratch.
+  const DELETED_MEMORY_MS = 15 * 60_000;
+  const deleted = new Map(); // path -> deletedAt
+  const wasDeleted = (p, sent) => {
+    const at = deleted.get(p);
+    if (at === undefined) return false;
+    if (Date.now() - at > DELETED_MEMORY_MS) {
+      deleted.delete(p);
+      return false;
+    }
+    return sent !== 0 && db.read(p).lastModified === 0;
+  };
 
   // Read: only sends the text when it changed since lastModified (0 always asks for it).
   app.get('/api/body/*', async (request) => {
     const p = resolve(request, '/api/body');
     const sent = Number(request.query.lastModified ?? 0);
+    if (wasDeleted(p, sent)) throw apiError(410, 'page-deleted');
     const page = db.read(p);
     if (Number.isFinite(sent) && sent !== 0 && sent === page.lastModified) {
       return { changed: false, lastModified: page.lastModified };
@@ -80,12 +106,30 @@ export default async function apiRoutes(app, { config, db, hub, files }) {
 
     if (!Number.isSafeInteger(sent) || sent < 0) throw apiError(400, 'invalid-last-modified');
     if (Buffer.byteLength(text, 'utf8') > config.maxBodyBytes) throw apiError(413, 'body-too-large');
+    if (wasDeleted(p, sent)) throw apiError(410, 'page-deleted');
 
     const result = db.save(p, text, sent, force);
     if (!result.ok) throw apiError(409, result.error);
+    if (result.lastModified !== 0) deleted.delete(p);
     hub.publish(p, 'change', { lastModified: result.lastModified });
     reply.type('application/json');
     return JSON.stringify(result.lastModified);
+  });
+
+  // Delete the page for everyone: its text and its shared files. Everyone on it
+  // gets `deleted` and is sent back to the home page. Subpages are kept.
+  app.delete('/api/body/*', async (request) => {
+    const p = resolve(request, '/api/body');
+    const existed = db.read(p).lastModified !== 0;
+    db.save(p, '', 0, true);
+    const removedFiles = files.removePage(p).length;
+    const now = Date.now();
+    for (const [path, at] of deleted) if (now - at > DELETED_MEMORY_MS) deleted.delete(path);
+    deleted.set(p, now);
+    const by = typeof request.query.by === 'string' ? request.query.by.slice(0, 40) : null;
+    const kicked = hub.finish(p, 'deleted', { by });
+    request.log.info({ kicked, removedFiles }, 'page deleted');
+    return { deleted: true, existed, removedFiles, kicked };
   });
 
   // Live updates (Server-Sent Events): `hello`, `change` and `presence`.

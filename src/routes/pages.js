@@ -8,11 +8,21 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-export default async function pageRoutes(app, { config, db, publicDir }) {
+export default async function pageRoutes(app, { config, db, address, publicDir }) {
   const render = (file) =>
     fs.readFileSync(path.join(publicDir, file), 'utf8').replaceAll('{{APP_NAME}}', escapeHtml(config.appName));
   const indexHtml = render('index.html');
   const padHtml = render('pad.html');
+
+  // The home page shows the configured address. Until the first-run setup is
+  // done it shows the address the browser used and asks for the real one.
+  function renderIndex(request) {
+    const configured = address.get();
+    const host = configured?.host ?? String(request.headers.host || 'localhost').slice(0, 300);
+    return indexHtml
+      .replace('{{HOST_LABEL}}', () => escapeHtml(`${host}/`))
+      .replace('{{SETUP}}', configured ? 'done' : 'required');
+  }
 
   app.get('/healthz', async (request, reply) => {
     if (!db.healthy()) return reply.code(503).send({ status: 'error' });
@@ -26,7 +36,7 @@ export default async function pageRoutes(app, { config, db, publicDir }) {
 
   app.get('/', async (request, reply) => {
     reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-cache');
-    return indexHtml;
+    return renderIndex(request);
   });
 
   // Any other path is an editing page. A path that is nested too deeply still

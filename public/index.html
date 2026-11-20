@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="/assets/base.css" />
     <link rel="stylesheet" href="/assets/home.css" />
   </head>
-  <body class="home">
+  <body class="home" data-setup="{{SETUP}}">
     <div class="backdrop" aria-hidden="true">
       <span class="blob blob-a"></span>
       <span class="blob blob-b"></span>
@@ -29,7 +29,7 @@
       <form id="go-form" class="go-form" autocomplete="off">
         <label for="name" class="visually-hidden">Page name</label>
         <div class="field">
-          <span id="host-label" class="host">localhost/</span>
+          <span id="host-label" class="host">{{HOST_LABEL}}</span>
           <input id="name" name="name" type="text" placeholder="your-secret-page" autocapitalize="off" spellcheck="false" autofocus />
         </div>
         <button type="submit" class="btn btn-primary go">
@@ -75,6 +75,25 @@
     </main>
 
     <footer class="home-foot">Self-hosted · Your pages stay on your server</footer>
+
+    <div id="setup" class="setup" hidden>
+      <form id="setup-form" class="setup-card" role="dialog" aria-modal="true" aria-labelledby="setup-title" autocomplete="off" novalidate>
+        <div class="setup-step">First-time setup</div>
+        <h2 id="setup-title">Where will people find this {{APP_NAME}}?</h2>
+        <p class="setup-text">Type the address people will use to open it, such as a domain or the server's IP. It is shown on this page and used in copied links. It is saved on the server and survives restarts.</p>
+        <label for="setup-address" class="visually-hidden">Address</label>
+        <input id="setup-address" class="setup-input" type="text" inputmode="url" spellcheck="false" autocapitalize="off" placeholder="notes.example.com" />
+        <div class="setup-preview" aria-live="polite">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" /><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" /></svg>
+          <span id="setup-link"></span>
+        </div>
+        <p id="setup-error" class="setup-error" hidden></p>
+        <div class="setup-actions">
+          <button type="button" id="setup-later" class="btn btn-ghost">Not now</button>
+          <button type="submit" id="setup-save" class="btn btn-primary">Save address</button>
+        </div>
+      </form>
+    </div>
 
     <script src="/assets/home.js" type="module"></script>
   </body>

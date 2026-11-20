@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { LogController } from 'fastify';
 import formbody from '@fastify/formbody';
 import fastifyStatic from '@fastify/static';
+import { addressStore } from './address.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { EventHub } from './events.js';
@@ -30,6 +31,7 @@ const SECURITY_HEADERS = {
 export async function buildApp({ overrides = {}, logger, now } = {}) {
   const config = Object.freeze({ ...loadConfig(), ...overrides });
   const db = openDatabase(config.dbPath, now ? { now } : undefined);
+  const address = addressStore(config, db);
   const hub = new EventHub({ maxPerIp: config.maxStreamsPerIp });
   const files = new FileStore({
     maxFileBytes: config.maxFileBytes,
@@ -119,8 +121,8 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
     maxAge: 0,
     etag: true,
   });
-  await app.register(apiRoutes, { config, db, hub, files });
-  await app.register(pageRoutes, { config, db, publicDir: PUBLIC_DIR });
+  await app.register(apiRoutes, { config, db, hub, files, address });
+  await app.register(pageRoutes, { config, db, address, publicDir: PUBLIC_DIR });
 
   app.addHook('preClose', async () => {
     clearInterval(sweeper);

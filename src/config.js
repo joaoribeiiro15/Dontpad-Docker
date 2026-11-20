@@ -1,5 +1,7 @@
 // Reads and validates the environment variables.
 
+import { normalizeAddress } from './address.js';
+
 function int(env, name, fallback, min) {
   const raw = env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -18,8 +20,18 @@ function bool(env, name, fallback) {
   throw new Error(`${name} must be true or false, got "${raw}"`);
 }
 
+function address(env, name) {
+  const raw = (env[name] || '').trim();
+  if (raw === '') return null;
+  const parsed = normalizeAddress(raw);
+  if (!parsed.ok) throw new Error(`${name} must be a host name or http(s) origin such as notes.example.com, got "${raw}"`);
+  return parsed.origin;
+}
+
 export function loadConfig(env = process.env) {
   return Object.freeze({
+    /** Fixed public address; when set, the first-run setup is skipped. */
+    publicAddress: address(env, 'PUBLIC_ADDRESS'),
     port: int(env, 'PORT', 3000, 0),
     host: env.HOST || '0.0.0.0',
     appName: (env.APP_NAME || 'openpad').trim() || 'openpad',

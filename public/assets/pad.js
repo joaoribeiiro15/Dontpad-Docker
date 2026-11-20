@@ -71,6 +71,9 @@ const state = {
   maxBodyBytes: 1_048_576,
   maxDepth: 10,
   lastSavedAt: null,
+  presence: 0,
+  deleting: false, // our own DELETE is in flight
+  deleted: false, // the page was deleted (by us or someone else): leaving
 };
 
 // ---- HTTP -------------------------------------------------------------------
@@ -181,6 +184,7 @@ function refreshSave() {
 
 function setPresence(count) {
   const el = $('presence');
+  state.presence = count;
   el.hidden = !(state.live && count > 0);
   $('presence-count').textContent = String(count);
   el.title = count === 1 ? 'Only you are on this page' : `${count} people on this page`;
@@ -307,6 +311,7 @@ function isNetworkError(err) {
 function handleFailure(err) {
   const now = Date.now();
   if (err instanceof HttpError) {
+    if (err.status === 410) return pageDeleted(false); // deleted while we were away
     if (err.code === 'nesting-limit-reached') return block(`This page is nested too deeply (the limit is ${state.maxDepth} levels), so it can't be edited.`);
     if (err.code === 'invalid-path') return block("This address isn't a valid page.");
     if (err.status === 429) {
@@ -419,7 +424,7 @@ async function update() {
 }
 
 function tick() {
-  if (!state.loaded || state.blocked || state.actionRunning !== null || dialog.open) return;
+  if (!state.loaded || state.blocked || state.deleting || state.actionRunning !== null || dialog.open) return;
   const now = Date.now();
   if (now < state.notBefore) return;
 
@@ -446,6 +451,7 @@ function streamClosed() {
 }
 
 function connectEvents() {
+  if (state.deleted) return;
   if (!hasEventSource) {
     state.stream = 'down';
     refreshSync();
@@ -483,7 +489,10 @@ function connectEvents() {
       // ignore
     }
   });
+  // Someone deleted the page: the server sends this last and closes the stream.
+  events.addEventListener('deleted', () => pageDeleted(state.deleting));
   events.addEventListener('error', () => {
+    if (state.deleted) return;
     state.live = false;
     state.stream = 'down';
     setPresence(0);
@@ -724,7 +733,7 @@ async function copyText(text, done) {
 
 $('act-copy').addEventListener('click', () => {
   closeMenu();
-  copyText(location.origin + encodedPath, 'Link copied to clipboard');
+  copyText((state.publicOrigin || location.origin) + encodedPath, 'Link copied to clipboard');
 });
 
 $('act-txt').addEventListener('click', () => {
@@ -792,6 +801,146 @@ $('act-theme').addEventListener('click', () => {
   syncThemeItem();
 });
 
+// ---- Delete the page for everyone ---------------------------------------------------
+
+const deleteDialog = $('delete-dialog');
+const REDIRECT_AFTER_MS = 3000;
+
+$('act-delete').addEventListener('click', () => {
+  closeMenu();
+  $('delete-path').textContent = pagePath;
+  const others = Math.max(0, state.presence - 1);
+  $('delete-others').textContent =
+    !state.live || others === 0
+      ? 'Nobody else is on this page right now.'
+      : `${others === 1 ? '1 other person is' : `${others} other people are`} on this page right now. They will see it disappear and be sent to the home page.`;
+  deleteDialog.showModal();
+  $('delete-cancel').focus();
+});
+
+$('delete-cancel').addEventListener('click', () => deleteDialog.close());
+
+$('delete-confirm').addEventListener('click', async () => {
+  const button = $('delete-confirm');
+  button.disabled = true;
+  state.deleting = true; // no saves from here on
+  try {
+    await request(api('body'), { method: 'DELETE', headers: { Accept: 'application/json' } });
+    pageDeleted(true);
+  } catch (err) {
+    state.deleting = false;
+    if (err instanceof HttpError && err.status === 410) return pageDeleted(false);
+    toast(isNetworkError(err) ? 'Could not reach the server. The page was not deleted.' : 'Could not delete the page. Try again.', { kind: 'error', ms: 4000 });
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function forgetRecent() {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    if (Array.isArray(list)) localStorage.setItem(RECENT_KEY, JSON.stringify(list.filter((r) => r && r.path !== pagePath)));
+  } catch {
+    // ignore
+  }
+}
+
+/** Copies the visible text into words that can fall away (a textarea can't animate its letters). */
+function crumbleText() {
+  if (!textarea.value.trim()) return;
+  const rect = textarea.getBoundingClientRect();
+  const cs = getComputedStyle(textarea);
+  const ghost = document.createElement('div');
+  ghost.className = 'crumble';
+  ghost.setAttribute('aria-hidden', 'true');
+  for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'tabSize', 'color']) {
+    ghost.style[prop] = cs[prop];
+  }
+  Object.assign(ghost.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+  const inner = document.createElement('div');
+  inner.style.transform = `translateY(${-textarea.scrollTop}px)`;
+  let words = 0;
+  for (const token of textarea.value.split(/(\s+)/)) {
+    if (!token) continue;
+    if (/^\s+$/.test(token)) {
+      inner.append(token);
+      continue;
+    }
+    if (++words > 4000) break;
+    const span = document.createElement('span');
+    span.textContent = token;
+    inner.append(span);
+  }
+  ghost.append(inner);
+  document.body.append(ghost);
+
+  // Only the words in view fall; lower lines go first, like a page crumbling.
+  const top = textarea.scrollTop;
+  const height = rect.height;
+  for (const span of inner.children) {
+    const y = span.offsetTop - top;
+    if (y < -40 || y > height + 40) {
+      span.style.visibility = 'hidden';
+      continue;
+    }
+    const fromBottom = 1 - Math.min(1, Math.max(0, y / height));
+    span.style.setProperty('--d', `${(fromBottom * 0.45 + Math.random() * 0.3).toFixed(3)}s`);
+    span.style.setProperty('--x', `${Math.round((Math.random() - 0.5) * 140)}px`);
+    span.style.setProperty('--r', `${Math.round((Math.random() - 0.5) * 100)}deg`);
+    span.classList.add('fall');
+  }
+}
+
+function pageDeleted(byMe) {
+  if (state.deleted) return;
+  state.deleted = true;
+  state.blocked = true;
+  state.deleting = false;
+  clearTimeout(reconnectTimer);
+  if (events) {
+    events.close();
+    events = null;
+  }
+  closeMenu();
+  if (dialog.open) dialog.close();
+  if (deleteDialog.open) deleteDialog.close();
+  setPresence(0);
+  forgetRecent();
+
+  crumbleText();
+  textarea.disabled = true;
+  document.body.classList.add('page-deleting');
+  document.querySelectorAll('#files-layer .file-win').forEach((win) => {
+    win.style.setProperty('--d', `${(Math.random() * 0.35).toFixed(3)}s`);
+    win.style.setProperty('--r', `${Math.round((Math.random() - 0.5) * 50)}deg`);
+  });
+
+  $('deleted-text').textContent = byMe
+    ? 'You deleted it for everyone. Taking you to the home page…'
+    : 'Someone deleted it while you were here. Taking you to the home page…';
+  const overlay = $('deleted');
+  setTimeout(() => {
+    overlay.hidden = false;
+    requestAnimationFrame(() => overlay.classList.add('show'));
+    $('deleted-home').focus();
+    let left = Math.round(REDIRECT_AFTER_MS / 1000);
+    $('deleted-seconds').textContent = String(left);
+    const timer = setInterval(() => {
+      left -= 1;
+      $('deleted-seconds').textContent = String(Math.max(left, 0));
+      if (left <= 0) {
+        clearInterval(timer);
+        location.replace('/');
+      }
+    }, 1000);
+  }, 900);
+}
+
+$('deleted-home').addEventListener('click', (event) => {
+  event.preventDefault();
+  location.replace('/');
+});
+
 // ---- Recently opened (this browser only) ----------------------------------------
 
 function rememberRecent() {
@@ -814,6 +963,7 @@ async function loadConfig() {
     if (typeof cfg.appName === 'string' && cfg.appName) state.appName = cfg.appName;
     if (Number.isFinite(cfg.maxBodyBytes)) state.maxBodyBytes = cfg.maxBodyBytes;
     if (Number.isFinite(cfg.maxDepth)) state.maxDepth = cfg.maxDepth;
+    if (typeof cfg.publicAddress === 'string' && /^https?:\/\//.test(cfg.publicAddress)) state.publicOrigin = cfg.publicAddress;
     files?.setLimits(cfg);
   } catch {
     // Defaults are used.

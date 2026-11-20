@@ -9,7 +9,7 @@ import zlib from 'node:zlib';
 import { buildApp } from '../src/app.js';
 
 async function makeApp(overrides = {}) {
-  return buildApp({ overrides: { dbPath: ':memory:', ...overrides }, logger: false });
+  return buildApp({ overrides: { dbPath: ':memory:', publicAddress: null, ...overrides }, logger: false });
 }
 
 const form = (fields) => ({
@@ -77,6 +77,7 @@ test('GET /api/config', async (t) => {
     maxFileBytes: 10 * 1024 * 1024,
     maxFilesPerPage: 20,
     fileTtlMs: 6 * 60 * 60 * 1000,
+    publicAddress: null,
   });
 });
 
@@ -225,7 +226,7 @@ test('unknown API routes and methods', async (t) => {
   let res = await app.inject('/api/nothing');
   assert.equal(res.statusCode, 404);
   assert.deepEqual(res.json(), { error: 'not-found' });
-  res = await app.inject({ method: 'DELETE', url: '/api/body/x' });
+  res = await app.inject({ method: 'PUT', url: '/api/body/x' });
   assert.equal(res.statusCode, 404);
 });
 

@@ -180,6 +180,15 @@ export class FileStore {
     return file;
   }
 
+  /** Removes every file of a page (the page was deleted) and returns them. */
+  removePage(path) {
+    const page = this.pages.get(path);
+    if (!page) return [];
+    const removed = [...page.files.values()];
+    for (const file of removed) this.remove(file.id);
+    return removed;
+  }
+
   /** Removes expired files and returns them. */
   sweep() {
     const now = this.now();

@@ -35,7 +35,7 @@ export class EventHub {
       if (removed) return;
       removed = true;
       set.delete(client);
-      if (set.size === 0) this.channels.delete(path);
+      if (set.size === 0 && this.channels.get(path) === set) this.channels.delete(path);
       const left = (this.perIp.get(ip) ?? 1) - 1;
       if (left <= 0) this.perIp.delete(ip);
       else this.perIp.set(ip, left);
@@ -58,6 +58,18 @@ export class EventHub {
 
   count(path) {
     return this.channels.get(path)?.size ?? 0;
+  }
+
+  /** Sends a last event to everyone on a page and closes their streams (the page was deleted). */
+  finish(path, event, data) {
+    const set = this.channels.get(path);
+    if (!set) return 0;
+    // Detached first, so nothing else is written to these streams while they close.
+    this.channels.delete(path);
+    const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const clients = [...set];
+    for (const client of clients) client.res.end(frame);
+    return clients.length;
   }
 
   /** Ends every stream (graceful shutdown). */

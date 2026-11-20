@@ -36,6 +36,8 @@ export default defineConfig({
           DB_PATH: path.join(os.tmpdir(), `openpad-e2e-${Date.now()}.db`),
           SYNC_INTERVAL_MS: String(syncIntervalMs),
           RATE_LIMIT_PER_MIN: '100000',
+          // The first-run setup has its own test with its own server.
+          PUBLIC_ADDRESS: 'pad.example.test',
           LOG_LEVEL: 'warn',
         },
       },

@@ -86,6 +86,11 @@
               Theme
               <span class="hint" id="theme-name">System</span>
             </button>
+            <div class="popover-sep" role="separator"></div>
+            <button class="popover-item danger" role="menuitem" type="button" id="act-delete">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" /><path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" /></svg>
+              Delete page…
+            </button>
           </div>
         </div>
       </div>
@@ -175,6 +180,41 @@
         <button id="conflict-override" type="button" class="btn btn-primary">Overwrite</button>
       </div>
     </dialog>
+
+    <dialog id="delete-dialog" class="modal" aria-labelledby="delete-title">
+      <div class="modal-body">
+        <div class="modal-icon danger">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" /><path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" /></svg>
+        </div>
+        <h2 id="delete-title">Delete this page for everyone?</h2>
+        <p>The text of <strong id="delete-path"></strong> and its shared files are deleted. This can't be undone.</p>
+        <p id="delete-others"></p>
+        <p class="modal-note">Subpages are kept.</p>
+      </div>
+      <div class="modal-actions">
+        <button id="delete-cancel" type="button" class="btn">Cancel</button>
+        <button id="delete-confirm" type="button" class="btn btn-danger">Delete page</button>
+      </div>
+    </dialog>
+
+    <div id="deleted" class="deleted" hidden role="alertdialog" aria-labelledby="deleted-title" aria-describedby="deleted-text">
+      <div class="deleted-card">
+        <div class="deleted-bin" aria-hidden="true">
+          <svg viewBox="0 0 48 48">
+            <g class="bin-lid"><path d="M10 13h28" /><path d="M19 13V9.5A2.5 2.5 0 0 1 21.5 7h5A2.5 2.5 0 0 1 29 9.5V13" /></g>
+            <path class="bin-body" d="M13 13l2 25a3 3 0 0 0 3 2.7h12a3 3 0 0 0 3-2.7l2-25" />
+            <path class="bin-lines" d="M21 20v13M27 20v13" />
+          </svg>
+        </div>
+        <h2 id="deleted-title">This page was deleted</h2>
+        <p id="deleted-text"></p>
+        <div class="deleted-countdown">
+          <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="ring-bg" cx="18" cy="18" r="15" /><circle class="ring" cx="18" cy="18" r="15" /></svg>
+          <span id="deleted-seconds">3</span>
+        </div>
+        <a href="/" id="deleted-home" class="btn btn-primary">Go to the home page now</a>
+      </div>
+    </div>
 
     <script src="/assets/pad.js" type="module"></script>
   </body>
