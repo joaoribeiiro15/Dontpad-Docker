@@ -1,23 +1,81 @@
 <!doctype html>
-<html lang="pt">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Shared plain-text pads. Pick a name, share the link and write together in real time." />
     <title>{{APP_NAME}}</title>
     <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml" />
+    <script src="/assets/theme.js"></script>
+    <link rel="stylesheet" href="/assets/base.css" />
     <link rel="stylesheet" href="/assets/home.css" />
   </head>
-  <body>
-    <main class="home">
+  <body class="home">
+    <div class="backdrop" aria-hidden="true">
+      <span class="blob blob-a"></span>
+      <span class="blob blob-b"></span>
+      <span class="blob blob-c"></span>
+      <span class="grid"></span>
+    </div>
+
+    <main class="hero">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><rect x="3" y="2" width="26" height="28" rx="7" class="logo-bg" /><rect x="9" y="9" width="14" height="2.6" rx="1.3" class="logo-line l1" /><rect x="9" y="14.7" width="14" height="2.6" rx="1.3" class="logo-line l2" /><rect x="9" y="20.4" width="8.5" height="2.6" rx="1.3" class="logo-line l3" /></svg>
+      </div>
       <h1 class="brand">{{APP_NAME}}</h1>
-      <p class="tagline">A forma mais simples de partilhar texto</p>
+      <p class="tagline">Shared notes at the speed of a link.</p>
+      <p class="subtitle">Pick a name, share the URL and write together in real time.</p>
+
       <form id="go-form" class="go-form" autocomplete="off">
-        <label for="name" id="host-label" class="host-label">localhost/</label>
-        <input id="name" name="name" type="text" placeholder="your-secret-page" autocapitalize="off" spellcheck="false" autofocus />
-        <button type="submit">Go!</button>
+        <label for="name" class="visually-hidden">Page name</label>
+        <div class="field">
+          <span id="host-label" class="host">localhost/</span>
+          <input id="name" name="name" type="text" placeholder="your-secret-page" autocapitalize="off" spellcheck="false" autofocus />
+        </div>
+        <button type="submit" class="btn btn-primary go">
+          Go
+          <svg class="icon" viewBox="0 0 24 24"><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg>
+        </button>
       </form>
-      <p class="note">No login required</p>
+
+      <div class="below-form">
+        <span class="note">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 7.5-2" /></svg>
+          No login required
+        </span>
+        <span class="dot" aria-hidden="true"></span>
+        <button type="button" id="btn-random" class="link-btn">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M3 7h3.5a4 4 0 0 1 3.3 1.8l4.4 6.4A4 4 0 0 0 17.5 17H21" /><path d="m18 4 3 3-3 3" /><path d="M3 17h3.5a4 4 0 0 0 3.3-1.8l.7-1" /><path d="M14.2 8.8l.3-.5A4 4 0 0 1 17.5 7H21" /><path d="m18 14 3 3-3 3" /></svg>
+          Random page
+        </button>
+      </div>
+
+      <ul class="features">
+        <li>
+          <span class="feature-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></svg></span>
+          <span><strong>Real-time</strong>Edits show up for everyone in under a second.</span>
+        </li>
+        <li>
+          <span class="feature-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4 4 0 0 1-.5 7.97H7z" /><path d="m9.5 13.5 2 2 3.5-3.5" /></svg></span>
+          <span><strong>Auto-save</strong>Every keystroke is stored. Nothing to click.</span>
+        </li>
+        <li>
+          <span class="feature-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M4 4v6a3 3 0 0 0 3 3h6" /><path d="M4 4v14a2 2 0 0 0 2 2h7" /><rect x="14" y="10" width="7" height="6" rx="1.5" /><rect x="14" y="17" width="7" height="5" rx="1.5" /></svg></span>
+          <span><strong>Nested pages</strong>Any path works: /team/notes/today.</span>
+        </li>
+      </ul>
+
+      <section id="recent" class="recent" hidden aria-labelledby="recent-title">
+        <div class="recent-head">
+          <h2 id="recent-title">Recently opened</h2>
+          <button type="button" id="recent-clear" class="link-btn small">Clear</button>
+        </div>
+        <ul id="recent-list" class="recent-list"></ul>
+      </section>
     </main>
+
+    <footer class="home-foot">Self-hosted · Your pages stay on your server</footer>
+
     <script src="/assets/home.js" type="module"></script>
   </body>
 </html>

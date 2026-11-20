@@ -1,4 +1,4 @@
-// Ligação SQLite, esquema e prepared statements (secção 6).
+// SQLite connection, schema and prepared statements.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,9 +13,9 @@ const SCHEMA = `
   ) WITHOUT ROWID;
 `;
 
-// Primeiro segmento abaixo de :p, mesmo quando só existe um descendente mais
-// profundo. O intervalo ] :p/ , :p0 [ usa o índice da chave primária, porque
-// "0" é o carácter seguinte a "/" em ASCII.
+// First segment below :p, even when only a deeper descendant exists. The range
+// ] :p/ , :p0 [ uses the primary key index, because "0" is the character right
+// after "/" in ASCII.
 const MENU_SQL = `
   SELECT DISTINCT
     CASE WHEN instr(substr(path, length(:p) + 2), '/') = 0
@@ -53,19 +53,19 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
     ping: db.prepare('SELECT 1').pluck(),
   };
 
-  /** Uma página inexistente comporta-se como body "" e lastModified 0. */
+  /** A page that does not exist behaves as body "" and lastModified 0. */
   function read(p) {
     return stmt.get.get(p) ?? { body: '', lastModified: 0 };
   }
 
-  // Comparação e escrita na mesma transação: dois pedidos simultâneos nunca passam ambos.
+  // Compare and write in the same transaction: two concurrent requests never both succeed.
   const saveTx = db.transaction((p, body, clientLastModified, force) => {
     const current = read(p);
     if (!force && clientLastModified !== current.lastModified) {
       return { ok: false, error: 'update-timestamp-mismatch' };
     }
     if (body === '') {
-      // Gravar texto vazio apaga o registo; a página volta a ter lastModified 0.
+      // Saving an empty text deletes the row; the page is back to lastModified 0.
       stmt.remove.run(p);
       return { ok: true, lastModified: 0 };
     }
@@ -86,7 +86,7 @@ export function openDatabase(file, { now = () => Date.now() } = {}) {
         return false;
       }
     },
-    /** Cópia consistente com o serviço a correr. */
+    /** Consistent copy while the service is running. */
     backup: (dest) => db.backup(dest),
     close() {
       if (db.open) db.close();

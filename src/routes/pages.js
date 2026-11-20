@@ -1,4 +1,4 @@
-// Páginas HTML (index.html, pad.html), robots.txt e /healthz.
+// HTML pages (index.html, pad.html), robots.txt and /healthz.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,13 +29,13 @@ export default async function pageRoutes(app, { config, db, publicDir }) {
     return indexHtml;
   });
 
-  // Qualquer outro caminho é uma página de edição. Um caminho com demasiados
-  // níveis abre a página na mesma: é a API que responde nesting-limit-reached
-  // e o cliente mostra a mensagem (RF-14).
+  // Any other path is an editing page. A path that is nested too deeply still
+  // opens the page: the API answers nesting-limit-reached and the browser shows
+  // the message.
   app.get('/*', async (request, reply) => {
     const result = parsePath(request.raw.url.split('?')[0], { maxDepth: config.maxDepth });
     if (!result.ok && result.error === 'invalid-path') {
-      return reply.code(400).type('text/plain; charset=utf-8').send('Caminho inválido.\n');
+      return reply.code(400).type('text/plain; charset=utf-8').send('Invalid page path.\n');
     }
     reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-cache').header('X-Robots-Tag', 'noindex');
     return padHtml;

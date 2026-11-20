@@ -1,12 +1,10 @@
 # openpad
 
-Clone self-hosted do [dontpad.com](https://dontpad.com): qualquer URL é uma página de texto partilhada, sem login, com gravação automática e sincronização entre browsers. Arranca com um único `docker compose up` e guarda tudo num ficheiro SQLite.
+A self-hosted clone of [dontpad.com](https://dontpad.com). Every URL is a shared plain-text page: no sign-up, auto-save, and edits that reach everyone on the page in well under a second. It starts with a single `docker compose up` and keeps everything in one SQLite file.
 
-Implementação da especificação técnica "Clone do Dontpad: especificação técnica completa (Docker)". Replica-se o comportamento do original, não o código nem a marca.
+## Quick start
 
-## Arranque rápido
-
-Requisitos: Docker com o plugin Compose.
+You need Docker with the Compose plugin.
 
 ```bash
 git clone https://github.com/joaoribeiiro15/Dontpad-Docker.git
@@ -14,157 +12,181 @@ cd Dontpad-Docker
 docker compose up -d --build
 ```
 
-Abre `http://localhost:3000`, escreve um nome e carrega em **Go!**. Partilha a ligação: quem a abrir vê e edita o mesmo texto.
+Open `http://localhost:3000`, type a name and press **Go**. Share the link: whoever opens it sees and edits the same text.
 
 ```bash
-docker compose logs -f openpad      # ver logs
-docker compose down                 # parar, os dados ficam no volume openpad-data
+docker compose ps                   # wait for "healthy"
+docker compose logs -f openpad      # follow the logs
+docker compose down                 # stop; the data stays in the openpad-data volume
 ```
 
-## Como funciona
+## Features
 
-- **Uma página por caminho.** `/reuniao`, `/equipa/notas/2026`: qualquer caminho válido abre uma página, criada ao escrever nela. Uma página vazia não é guardada.
-- **Subpáginas.** `/pai/filho` é uma página independente. A página mãe mostra um menu lateral com as subpáginas diretas, por ordem alfabética, e uma ligação para descarregar tudo em `.zip`.
-- **Sincronização por polling, como no original.** Um relógio de 100 ms no browser faz no máximo um pedido a cada 5 s, nunca dois ao mesmo tempo. Se há alterações locais grava (`POST`), senão pergunta se a página mudou (`GET`). Com o separador em segundo plano não faz pedidos.
-- **Controlo de concorrência otimista.** O servidor gera um `lastModified` a cada gravação. Uma gravação feita sobre uma versão antiga recebe `409 update-timestamp-mismatch` e o browser mostra um modal: **Substituir** grava por cima, **Descartar** troca o texto local pelo do servidor.
-- **Indicador de estado** no canto superior direito: a gravar, gravado (2 s, fundo verde) e erro com nova tentativa a cada ciclo.
-- A tecla **Tab** insere uma tabulação, e o browser avisa ao sair da página com texto por gravar.
+- **One page per path.** `/meeting`, `/team/notes/2026`: any valid path is a page, created the moment someone writes in it. An empty page is not stored.
+- **Real-time sync.** Edits are saved about 250 ms after you stop typing and pushed to everyone else on the page over a live connection. Between two browsers on a local network this takes around 350 ms.
+- **Automatic merging.** When two people edit different parts of the page at the same time, both changes are kept. Only edits to the same spot open a dialog, with **Overwrite**, **Discard** and **Copy my text**.
+- **Sync and save indicators** in the top-right corner. Sync shows *Live*, *Syncing*, *Reconnecting* or *Offline*. Save shows *Saved*, *Unsaved*, *Saving* or *Not saved*. A counter shows how many people are on the page.
+- **Subpages.** `/parent/child` is its own page. A sidebar lists the direct subpages and lets you create new ones.
+- **Survives outages.** If the server goes away, your text stays in the editor, the indicators say so, and it is saved as soon as the server is back. While the live connection is down, the page falls back to polling.
+- **Light and dark themes**, an optional monospace font, a word and character count, and *Recently opened* pages on the home page (stored only in your browser).
+- **Export** as `.txt`, or as a `.zip` with all subpages.
+- **Keyboard:** Tab inserts a tab, Ctrl/Cmd+S saves right away, and the browser warns before you leave with unsaved text.
 
-Uma alteração chega aos outros browsers em 10 s no pior caso: 5 s para gravar e 5 s para o outro perguntar.
+## Configuration
 
-## Configuração
+Every variable is optional. With Compose, copy `.env.example` to `.env` and change what you need.
 
-Todas as variáveis são opcionais. Com o Compose, copia `.env.example` para `.env` e muda o que precisares.
-
-| Variável | Omissão | Função |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `HOST_PORT` | `3000` | Porto publicado no host (só no Compose) |
-| `PORT` | `3000` | Porto HTTP dentro do contentor |
-| `APP_NAME` | `openpad` | Nome na página inicial e no título dos separadores |
-| `DB_PATH` | `/data/openpad.db` | Ficheiro SQLite |
-| `SYNC_INTERVAL_MS` | `5000` | Intervalo do ciclo de sincronização, entregue ao browser |
-| `REQUEST_TIMEOUT_MS` | `10000` | Timeout dos pedidos no browser |
-| `MAX_BODY_BYTES` | `1048576` | Tamanho máximo do texto de uma página, em bytes UTF-8 |
-| `MAX_DEPTH` | `10` | Níveis máximos de subpáginas |
-| `RATE_LIMIT_PER_MIN` | `120` | Pedidos à API por IP e por minuto |
-| `TRUST_PROXY` | `false` | Ler o IP de `X-Forwarded-For` quando há proxy inverso |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` ou `error` |
+| `HOST_PORT` | `3000` | Port published on the host (Compose only) |
+| `PORT` | `3000` | HTTP port inside the container |
+| `APP_NAME` | `openpad` | Name on the home page and in tab titles |
+| `DB_PATH` | `/data/openpad.db` | SQLite file |
+| `SYNC_INTERVAL_MS` | `5000` | Fallback polling interval while the live connection is down |
+| `REQUEST_TIMEOUT_MS` | `10000` | Browser request timeout |
+| `MAX_BODY_BYTES` | `1048576` | Maximum text size of one page, in UTF-8 bytes |
+| `MAX_DEPTH` | `10` | Maximum subpage depth |
+| `RATE_LIMIT_PER_MIN` | `600` | API requests per IP per minute |
+| `MAX_STREAMS_PER_IP` | `20` | Open live connections per IP (one per open tab) |
+| `TRUST_PROXY` | `false` | Read the client IP from `X-Forwarded-For` behind a reverse proxy |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
-Com o intervalo de 5 s, cada separador aberto faz cerca de 12 pedidos por minuto. O limite de 120 por IP chega para 10 separadores atrás do mesmo endereço.
+Someone typing non-stop sends about one save per second. The default rate limit leaves plenty of room for several tabs behind the same IP address.
 
-## Expor à Internet
+## Exposing it to the internet
 
-Coloca um proxy inverso com TLS à frente do porto 3000 e define `TRUST_PROXY=true`, para o limite de pedidos usar o IP real de cada cliente. Não é preciso suporte a WebSockets. Exemplo com Caddy:
+Put a reverse proxy with TLS in front of port 3000 and set `TRUST_PROXY=true`, so rate limits use each client's real IP. The live updates use Server-Sent Events, which are plain HTTP. They work through any proxy that does not buffer responses. Caddy needs no extra settings:
 
 ```
-notas.exemplo.pt {
+notes.example.com {
 	reverse_proxy localhost:3000
+}
+```
+
+With Nginx, turn buffering off for `/api/events/`. The server also sends `X-Accel-Buffering: no`.
+
+```nginx
+location /api/events/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
 }
 ```
 
 ## API
 
-A API vive na mesma origem, sob `/api`. Todas as respostas levam `Cache-Control: no-store`.
+The API lives on the same origin, under `/api`. Every response carries `Cache-Control: no-store`.
 
-| Método e rota | Função | Resposta |
+| Method and route | Purpose | Response |
 | --- | --- | --- |
-| `GET /api/body/<caminho>?lastModified=<n>` | Ler o texto se mudou desde `n` | `{"changed": false, "lastModified": n}` ou `{"changed": true, "lastModified": m, "body": "..."}` |
-| `POST /api/body/<caminho>` | Gravar `text`, `lastModified` e `force` em `x-www-form-urlencoded` | O novo `lastModified` como número JSON |
-| `GET /api/menu/<caminho>` | Subpáginas diretas | `["compras", "reuniao"]`, sem ordem garantida |
-| `GET /api/zip/<caminho>` | Página e subpáginas, um `.txt` por página | `application/zip` |
-| `GET /api/config` | Configuração do browser | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes"}` |
-| `GET /healthz` | Verificação de saúde | `{"status": "ok"}` |
+| `GET /api/body/<path>?lastModified=<n>` | Read the text if it changed since `n` | `{"changed": false, "lastModified": n}` or `{"changed": true, "lastModified": m, "body": "..."}` |
+| `POST /api/body/<path>` | Save `text`, `lastModified` and `force` as `x-www-form-urlencoded` | The new `lastModified` as a JSON number |
+| `GET /api/events/<path>` | Live updates (Server-Sent Events) | `hello` and `change` with `{"lastModified"}`, `presence` with `{"count"}` |
+| `GET /api/menu/<path>` | Direct subpages | `["meeting", "shopping"]`, unordered |
+| `GET /api/zip/<path>` | The page and its subpages, one `.txt` each | `application/zip` |
+| `GET /api/config` | Browser configuration | `{"appName", "syncIntervalMs", "requestTimeoutMs", "maxBodyBytes", "maxDepth"}` |
+| `GET /healthz` | Health check | `{"status": "ok"}` |
 
-Erros ao gravar:
+Errors when saving:
 
-| Situação | Código | Corpo |
+| Situation | Status | Body |
 | --- | --- | --- |
-| `lastModified` diferente do servidor e `force=false` | 409 | `{"error":"update-timestamp-mismatch"}` |
-| Texto acima de `MAX_BODY_BYTES` | 413 | `{"error":"body-too-large"}` |
-| Caminho com demasiados níveis | 400 | `{"error":"nesting-limit-reached"}` |
-| Caminho inválido ou reservado | 400 | `{"error":"invalid-path"}` |
-| Limite de pedidos excedido | 429 | `{"error":"rate-limited"}` |
+| `lastModified` differs from the server's and `force=false` | 409 | `{"error":"update-timestamp-mismatch"}` |
+| Text larger than `MAX_BODY_BYTES` | 413 | `{"error":"body-too-large"}` |
+| Path nested too deeply | 400 | `{"error":"nesting-limit-reached"}` |
+| Invalid or reserved path | 400 | `{"error":"invalid-path"}` |
+| Rate limit exceeded | 429 | `{"error":"rate-limited"}` |
 
-Exemplo:
+Example:
 
 ```bash
-curl "http://localhost:3000/api/body/reuniao?lastModified=0"
-curl -X POST --data-urlencode "text@notas.txt" -d lastModified=0 -d force=true http://localhost:3000/api/body/reuniao
+curl "http://localhost:3000/api/body/meeting?lastModified=0"
+curl -X POST --data-urlencode "text@notes.txt" -d lastModified=0 -d force=true http://localhost:3000/api/body/meeting
+curl -N http://localhost:3000/api/events/meeting
 ```
 
-### Regras de caminho
+### Path rules
 
-- O caminho é o pathname do URL descodificado, sem barra final e com barras duplicadas colapsadas.
-- Distingue maiúsculas de minúsculas.
-- Máximo de 255 caracteres e de `MAX_DEPTH` segmentos.
-- Os primeiros segmentos `api`, `assets`, `healthz` e `robots.txt` estão reservados.
-- São rejeitados os segmentos `.` e `..` e os caracteres de controlo.
+- The path is the decoded URL pathname, without a trailing slash and with repeated slashes collapsed.
+- Paths are case-sensitive.
+- At most 255 characters and `MAX_DEPTH` segments.
+- The first segments `api`, `assets`, `healthz` and `robots.txt` are reserved.
+- The segments `.` and `..` and control characters are rejected.
 
-## Cópias de segurança
+## How sync works
 
-Cópia consistente com o serviço a correr:
+1. Each page has a version number, `lastModified`, generated by the server on every save. It never repeats and never goes back.
+2. The browser saves the whole text together with the version it was based on. If someone else saved in the meantime, the server answers 409.
+3. On a 409, the browser fetches the latest text and does a three-way merge between the last common version, its own text and the server's. Edits in different places are combined and saved straight away. Overlapping edits open the conflict dialog.
+4. After every save the server pushes a `change` event to everyone else on that page, and their browsers fetch the new text immediately. Incoming text is merged into anything they are still typing, keeping the caret and scroll position.
+5. A tab in the background does not fetch anything; it catches up as soon as it is visible again.
+
+## Backups
+
+A consistent copy while the service is running:
 
 ```bash
 docker compose exec openpad node -e "require('better-sqlite3')('/data/openpad.db').backup('/data/backup.db').then(()=>console.log('ok'))"
 docker compose cp openpad:/data/backup.db ./backup.db
 ```
 
-Para restaurar: `docker compose down`, copia o ficheiro para o volume como `openpad.db` e volta a arrancar.
+To restore: `docker compose down`, copy the file into the volume as `openpad.db`, and start again.
 
-## Segurança
+## Security
 
-Tal como no original, quem conhece o URL lê e escreve: o nome da página é o único segredo. Usa nomes difíceis de adivinhar. As medidas abaixo protegem o serviço, não o conteúdo.
+As with the original, anyone who knows a URL can read and write it: the page name is the only secret. Use names that are hard to guess, such as the ones from **Random page**. The measures below protect the service, not the content.
 
-- O texto só entra no DOM por `textarea.value` e `textContent`, nunca por `innerHTML`.
-- Só prepared statements com parâmetros.
-- Limite de pedidos por IP na API, com resposta 429. O browser duplica o intervalo até 60 s e volta ao normal após um sucesso.
-- Limite de tamanho por página e limite do corpo do pedido no servidor.
-- Cabeçalhos `Content-Security-Policy: default-src 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` e `X-Frame-Options: DENY`.
-- `robots.txt` a bloquear tudo e `X-Robots-Tag: noindex` nas páginas de edição e na API.
-- O processo corre como utilizador `node`. No Compose, o sistema de ficheiros do contentor é só de leitura fora de `/data` e `/tmp`, sem capabilities.
-- Os logs registam método, rota normalizada, código e duração. Nunca registam o caminho nem o texto das páginas.
+- Page text only reaches the DOM through `textarea.value` and `textContent`, never `innerHTML`.
+- Prepared statements with parameters only.
+- Per-IP rate limit on the API and a per-IP cap on live connections, both answering 429. The browser backs off up to 60 seconds and recovers after a success.
+- Per-page size limit and a request body limit on the server.
+- `Content-Security-Policy: default-src 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`.
+- `robots.txt` blocks everything, and editing pages and the API send `X-Robots-Tag: noindex`.
+- The process runs as the `node` user. With Compose the container filesystem is read-only except `/data` and `/tmp`, with no capabilities.
+- Logs record the method, route pattern, status and duration. They never record a page path or its text.
 
-## Desenvolvimento
+## Development
 
-Requer Node.js 22.2 ou mais recente.
+Requires Node.js 22.2 or later.
 
 ```bash
 npm install
-npm run dev                      # http://localhost:3000, base de dados em ./data/openpad.db
-npm test                         # unitários e API (node --test, fastify.inject)
-npx playwright install chromium  # uma vez
-npm run test:e2e                 # ponta a ponta, CA-01 a CA-08, CA-10 e extras
+npm run dev                      # http://localhost:3000, database in ./data/openpad.db
+npm test                         # unit and API tests (node --test)
+npx playwright install chromium  # once
+npm run test:e2e                 # end-to-end tests with two browsers
 ```
 
-Por omissão, os testes ponta a ponta arrancam um servidor local com um ciclo de 1 s para correrem depressa. Para os correr com o ciclo real ou contra o contentor:
+The end-to-end tests start their own server by default. To run them against the container:
 
 ```bash
-SYNC_INTERVAL_MS=5000 npm run test:e2e
 BASE_URL=http://localhost:3000 npm run test:e2e
 ```
 
-Estrutura:
+Project layout:
 
 ```
 src/
-  server.js        arranque e encerramento limpo
-  app.js           montagem do Fastify, cabeçalhos, logs, erros
-  config.js        variáveis de ambiente
-  paths.js         normalização e validação de caminhos, regra de lastModified
-  db.js            SQLite (WAL), esquema, prepared statements, consulta do menu
-  zip.js           escritor de .zip sem dependências
-  routes/api.js    body, menu, config, zip, limite de pedidos
+  server.js        startup and graceful shutdown
+  app.js           Fastify setup, headers, logging, errors
+  config.js        environment variables
+  paths.js         path normalisation and validation, lastModified rule
+  db.js            SQLite (WAL), schema, prepared statements, menu query
+  events.js        live-update hub (Server-Sent Events)
+  zip.js           dependency-free .zip writer
+  routes/api.js    body, events, menu, config, zip, rate limit
   routes/pages.js  index.html, pad.html, robots.txt, healthz
 public/
   index.html, pad.html
-  assets/          home.css, pad.css, home.js, pad.js, icons/
+  assets/          base.css, home.css, pad.css, theme.js, home.js, pad.js, merge.js, icons/
 test/
-  paths.test.js, db.test.js, api.test.js
+  paths.test.js, db.test.js, merge.test.js, api.test.js
   e2e/sync.spec.js
 ```
 
-O workflow em `.github/workflows/ci.yml` corre os testes unitários, de API e ponta a ponta. Depois constrói a imagem, faz um teste de fumo ao `/healthz` e publica em `ghcr.io/joaoribeiiro15/dontpad-docker` em cada push para `main`.
+The workflow in `.github/workflows/ci.yml` runs the unit, API and end-to-end tests. It then builds the image, runs a smoke test, repeats the end-to-end tests against the container, and publishes the image to `ghcr.io/joaoribeiiro15/dontpad-docker` on every push to `main`.
 
-## Licença
+## License
 
 MIT.

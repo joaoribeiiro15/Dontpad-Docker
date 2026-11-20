@@ -1,7 +1,7 @@
 {
   "name": "openpad",
-  "version": "1.0.0",
-  "description": "Clone self-hosted do dontpad.com: páginas de texto partilhadas por URL, gravação automática e sincronização por polling, num único contentor Docker.",
+  "version": "1.1.0",
+  "description": "Self-hosted dontpad.com clone: plain-text pages shared by URL, auto-save and real-time sync, in a single Docker container.",
   "private": true,
   "type": "module",
   "license": "MIT",

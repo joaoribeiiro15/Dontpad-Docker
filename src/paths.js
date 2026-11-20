@@ -1,7 +1,7 @@
-// Normalização e validação de caminhos de página (regras da secção 3).
+// Page path normalisation and validation.
 //
-// Um caminho canónico começa por "/", não tem barra final nem barras
-// duplicadas, e distingue maiúsculas de minúsculas: "/notas/Reuniao".
+// A canonical path starts with "/", has no trailing slash and no repeated
+// slashes, and is case-sensitive: "/notes/Meeting".
 
 export const MAX_PATH_LENGTH = 255;
 export const RESERVED = new Set(['api', 'assets', 'healthz', 'robots.txt']);
@@ -10,9 +10,9 @@ export const RESERVED = new Set(['api', 'assets', 'healthz', 'robots.txt']);
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 /**
- * Converte um pathname (ainda codificado, tal como chega no URL) num caminho
- * canónico. Devolve { ok: true, path, segments } ou { ok: false, error }, onde
- * error é "invalid-path" ou "nesting-limit-reached".
+ * Turns a pathname (still percent-encoded, as it arrives in the URL) into a
+ * canonical path. Returns { ok: true, path, segments } or { ok: false, error },
+ * where error is "invalid-path" or "nesting-limit-reached".
  */
 export function parsePath(rawPathname, { maxDepth = 10 } = {}) {
   if (typeof rawPathname !== 'string') return { ok: false, error: 'invalid-path' };
@@ -38,7 +38,7 @@ export function parsePath(rawPathname, { maxDepth = 10 } = {}) {
   return { ok: true, path, segments };
 }
 
-/** Converte um caminho canónico no pathname codificado usado nos URLs. */
+/** Turns a canonical path into the percent-encoded pathname used in URLs. */
 export function encodePath(path) {
   return path
     .split('/')
@@ -46,7 +46,7 @@ export function encodePath(path) {
     .join('/');
 }
 
-/** Regra de versão: nunca repete nem recua (secção 6). */
+/** Version rule: never repeats and never goes back. */
 export function nextLastModified(previous, now = Date.now()) {
   return Math.max(now, previous + 1);
 }

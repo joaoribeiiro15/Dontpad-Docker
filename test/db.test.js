@@ -11,35 +11,35 @@ function fixedClock(start = 1_000_000) {
   return now;
 }
 
-test('página inexistente: body vazio e lastModified 0', () => {
+test('missing page: empty body and lastModified 0', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(db.read('/nada'), { body: '', lastModified: 0 });
+  assert.deepEqual(db.read('/nothing'), { body: '', lastModified: 0 });
   db.close();
 });
 
-test('gravar com o lastModified certo, recusar com outro, aceitar com force', () => {
+test('saves with the right lastModified, refuses a stale one, accepts force', () => {
   const now = fixedClock();
   const db = openDatabase(':memory:', { now });
 
-  const first = db.save('/a', 'um', 0, false);
+  const first = db.save('/a', 'one', 0, false);
   assert.deepEqual(first, { ok: true, lastModified: 1_000_000 });
 
-  // Mesmo instante: a versão avança na mesma.
-  const second = db.save('/a', 'dois', first.lastModified, false);
+  // Same instant: the version still moves forward.
+  const second = db.save('/a', 'two', first.lastModified, false);
   assert.deepEqual(second, { ok: true, lastModified: 1_000_001 });
 
-  assert.deepEqual(db.save('/a', 'antigo', first.lastModified, false), { ok: false, error: 'update-timestamp-mismatch' });
-  assert.deepEqual(db.save('/a', 'antigo', 0, false), { ok: false, error: 'update-timestamp-mismatch' });
-  assert.equal(db.read('/a').body, 'dois');
+  assert.deepEqual(db.save('/a', 'stale', first.lastModified, false), { ok: false, error: 'update-timestamp-mismatch' });
+  assert.deepEqual(db.save('/a', 'stale', 0, false), { ok: false, error: 'update-timestamp-mismatch' });
+  assert.equal(db.read('/a').body, 'two');
 
-  now.set(500); // relógio a recuar
-  const forced = db.save('/a', 'forçado', 123, true);
+  now.set(500); // clock going back
+  const forced = db.save('/a', 'forced', 123, true);
   assert.deepEqual(forced, { ok: true, lastModified: 1_000_002 });
-  assert.deepEqual(db.read('/a'), { body: 'forçado', lastModified: 1_000_002 });
+  assert.deepEqual(db.read('/a'), { body: 'forced', lastModified: 1_000_002 });
   db.close();
 });
 
-test('gravar texto vazio apaga o registo', () => {
+test('saving empty text deletes the row', () => {
   const db = openDatabase(':memory:');
   const r = db.save('/a', 'x', 0, false);
   assert.deepEqual(db.save('/a', '', r.lastModified, false), { ok: true, lastModified: 0 });
@@ -48,30 +48,30 @@ test('gravar texto vazio apaga o registo', () => {
   db.close();
 });
 
-test('menu: primeiro nível abaixo do caminho, incluindo descendentes profundos', () => {
+test('menu: first level below the path, including deep descendants', () => {
   const db = openDatabase(':memory:');
-  for (const p of ['/notas', '/notas/reuniao', '/notas/compras', '/notas/compras/maio', '/notas/fundo/a/b', '/notas0', '/notas-x/y', '/outra/z']) {
+  for (const p of ['/notes', '/notes/meeting', '/notes/shopping', '/notes/shopping/may', '/notes/deep/a/b', '/notes0', '/notes-x/y', '/other/z']) {
     db.save(p, 'x', 0, false);
   }
-  assert.deepEqual(db.menu('/notas').sort(), ['compras', 'fundo', 'reuniao']);
-  assert.deepEqual(db.menu('/notas/compras'), ['maio']);
-  assert.deepEqual(db.menu('/notas/reuniao'), []);
-  assert.deepEqual(db.menu('/vazio'), []);
+  assert.deepEqual(db.menu('/notes').sort(), ['deep', 'meeting', 'shopping']);
+  assert.deepEqual(db.menu('/notes/shopping'), ['may']);
+  assert.deepEqual(db.menu('/notes/meeting'), []);
+  assert.deepEqual(db.menu('/empty'), []);
   db.close();
 });
 
-test('menu usa o índice da chave primária', () => {
+test('menu query uses the primary key index', () => {
   const db = openDatabase(':memory:');
   const plan = db.raw
     .prepare("EXPLAIN QUERY PLAN SELECT path FROM pages WHERE path > :p || '/' AND path < :p || '0'")
-    .all({ p: '/notas' })
+    .all({ p: '/notes' })
     .map((r) => r.detail)
     .join(' ');
   assert.match(plan, /SEARCH pages USING PRIMARY KEY/);
   db.close();
 });
 
-test('tree: a página e todos os descendentes', () => {
+test('tree: the page and all its descendants', () => {
   const db = openDatabase(':memory:');
   for (const p of ['/a', '/a/b', '/a/b/c', '/ab', '/a0']) db.save(p, p, 0, false);
   assert.deepEqual(

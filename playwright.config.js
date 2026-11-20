@@ -1,8 +1,7 @@
-// Testes ponta a ponta (CA-01 a CA-08).
+// End-to-end tests.
 //
-// Por omissão arranca um servidor local com uma base de dados temporária e um
-// ciclo de sincronização de 1 s, para os testes correrem depressa. Para correr
-// contra o contentor: BASE_URL=http://localhost:3000 SYNC_INTERVAL_MS=5000 npx playwright test
+// By default this starts a local server with a temporary database. To run
+// against the container instead: BASE_URL=http://localhost:3000 npx playwright test
 
 import os from 'node:os';
 import path from 'node:path';

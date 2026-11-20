@@ -1,4 +1,4 @@
-// Montagem da aplicação Fastify. Separada de server.js para os testes usarem inject().
+// Builds the Fastify application. Kept apart from server.js so tests can use inject().
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import formbody from '@fastify/formbody';
 import fastifyStatic from '@fastify/static';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db.js';
+import { EventHub } from './events.js';
 import apiRoutes from './routes/api.js';
 import pageRoutes from './routes/pages.js';
 
@@ -21,29 +22,32 @@ const SECURITY_HEADERS = {
 };
 
 /**
- * Cria a aplicação. `overrides` substitui valores da configuração (usado nos
- * testes); `logger` aceita false para silenciar os logs.
+ * Creates the application. `overrides` replaces configuration values (used by
+ * the tests); `logger: false` silences the logs.
  */
 export async function buildApp({ overrides = {}, logger, now } = {}) {
   const config = Object.freeze({ ...loadConfig(), ...overrides });
   const db = openDatabase(config.dbPath, now ? { now } : undefined);
+  const hub = new EventHub({ maxPerIp: config.maxStreamsPerIp });
 
   const app = Fastify({
     logger: logger ?? { level: config.logLevel },
     trustProxy: config.trustProxy,
-    // O texto chega em x-www-form-urlencoded: cada byte UTF-8 pode ocupar 3 caracteres (%XX).
+    // The text arrives as x-www-form-urlencoded: each UTF-8 byte can take 3 characters (%XX).
     bodyLimit: config.maxBodyBytes * 3 + 16 * 1024,
-    // Desliga os logs automáticos por pedido (incluem o URL, que é o segredo da página).
+    // Turns off Fastify's per-request logs (they include the URL, which is the page's secret).
     logController: new LogController({ disableRequestLogging: true }),
+    // Live-update streams must not keep the server from shutting down.
+    forceCloseConnections: true,
     routerOptions: { ignoreDuplicateSlashes: true, maxParamLength: 1000 },
-    // URL com codificação inválida (ex.: "%E0%A4%A"): responde como qualquer caminho inválido.
+    // Badly encoded URL (e.g. "%E0%A4%A"): answered like any other invalid path.
     frameworkErrors(error, request, reply) {
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) reply.header(name, value);
       if (error.code === 'FST_ERR_BAD_URL') {
         if ((request.raw.url || '').startsWith('/api/')) {
           return reply.code(400).header('Cache-Control', 'no-store').send({ error: 'invalid-path' });
         }
-        return reply.code(400).type('text/plain; charset=utf-8').send('Caminho inválido.\n');
+        return reply.code(400).type('text/plain; charset=utf-8').send('Invalid page path.\n');
       }
       return reply.code(error.statusCode || 400).send({ error: 'bad-request' });
     },
@@ -51,8 +55,9 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
 
   app.decorate('config', config);
   app.decorate('db', db);
+  app.decorate('hub', hub);
 
-  // Logs: método, rota normalizada, código e duração. Nunca o caminho nem o texto das páginas.
+  // Logs: method, route pattern, status code and duration. Never the page path or its text.
   app.addHook('onResponse', async (request, reply) => {
     request.log.info(
       {
@@ -81,7 +86,7 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
 
   app.setNotFoundHandler((request, reply) => {
     if (request.raw.url.startsWith('/api/')) return reply.code(404).send({ error: 'not-found' });
-    return reply.code(404).type('text/plain; charset=utf-8').send('Não encontrado.\n');
+    return reply.code(404).type('text/plain; charset=utf-8').send('Not found.\n');
   });
 
   await app.register(formbody, { bodyLimit: config.maxBodyBytes * 3 + 16 * 1024 });
@@ -93,9 +98,10 @@ export async function buildApp({ overrides = {}, logger, now } = {}) {
     maxAge: 0,
     etag: true,
   });
-  await app.register(apiRoutes, { config, db });
+  await app.register(apiRoutes, { config, db, hub });
   await app.register(pageRoutes, { config, db, publicDir: PUBLIC_DIR });
 
+  app.addHook('preClose', async () => hub.close());
   app.addHook('onClose', async () => db.close());
   return app;
 }

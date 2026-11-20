@@ -1,19 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# ---- Dependências de produção -------------------------------------------
+# ---- Production dependencies ----------------------------------------------------
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
-# --ignore-scripts (também no .npmrc): o better-sqlite3 traz binários N-API já compilados (prebuilds/linux-x64.node,
-# glibc >= 2.34). Sem esta opção o npm 10 tenta "node-gyp rebuild", que precisa de Python e g++.
+# --ignore-scripts (also set in .npmrc): better-sqlite3 ships prebuilt N-API binaries
+# (prebuilds/linux-x64.node, glibc >= 2.34). Without it npm 10 runs "node-gyp rebuild",
+# which needs Python and a C++ compiler.
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
-# ---- Imagem final -----------------------------------------------------------
-# bookworm-slim em vez de Alpine: o better-sqlite3 traz binários pré-compilados
-# para glibc, sem toolchain de C++ na imagem.
+# ---- Final image -------------------------------------------------------------------
+# bookworm-slim rather than Alpine: better-sqlite3's prebuilt binary targets glibc.
 FROM node:22-bookworm-slim
 LABEL org.opencontainers.image.title="openpad" \
-      org.opencontainers.image.description="Clone self-hosted do dontpad.com" \
+      org.opencontainers.image.description="Self-hosted Dontpad clone with real-time sync" \
       org.opencontainers.image.source="https://github.com/joaoribeiiro15/Dontpad-Docker" \
       org.opencontainers.image.licenses="MIT"
 
@@ -27,10 +27,10 @@ COPY package.json ./
 COPY src ./src
 COPY public ./public
 
-# Falha já na construção se o binário do SQLite não carregar nesta plataforma.
+# Fail the build right away if the SQLite binary does not load on this platform.
 RUN node -e "const D=require('better-sqlite3'); new D(':memory:').prepare('select 1').get()"
 
-# O código fica com dono root (só leitura para o processo); só /data é gravável.
+# The code stays owned by root (read-only for the process); only /data is writable.
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data

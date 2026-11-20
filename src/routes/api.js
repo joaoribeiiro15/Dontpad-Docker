@@ -1,10 +1,10 @@
-// API sob /api: body, menu, config e zip (secções 7 e 8).
+// API under /api: body, events, menu, config and zip.
 
 import rateLimit from '@fastify/rate-limit';
 import { parsePath } from '../paths.js';
 import { buildZip } from '../zip.js';
 
-/** Extrai e valida o caminho da página a partir do URL bruto, depois do prefixo da rota. */
+/** Extracts and validates the page path from the raw URL, after the route prefix. */
 function pagePath(request, prefix, maxDepth) {
   const pathname = request.raw.url.split('?')[0];
   return parsePath(pathname.slice(prefix.length), { maxDepth });
@@ -14,7 +14,7 @@ function apiError(code, error) {
   return Object.assign(new Error(error), { statusCode: code, apiError: error });
 }
 
-export default async function apiRoutes(app, { config, db }) {
+export default async function apiRoutes(app, { config, db, hub }) {
   await app.register(rateLimit, {
     max: config.rateLimitPerMin,
     timeWindow: 60_000,
@@ -36,10 +36,11 @@ export default async function apiRoutes(app, { config, db }) {
     appName: config.appName,
     syncIntervalMs: config.syncIntervalMs,
     requestTimeoutMs: config.requestTimeoutMs,
-    maxBodyBytes: config.maxBodyBytes, // extra: usado na mensagem de texto demasiado grande
+    maxBodyBytes: config.maxBodyBytes,
+    maxDepth: config.maxDepth,
   }));
 
-  // 7.1 Ler: só envia o texto se mudou desde lastModified (0 pede sempre o texto).
+  // Read: only sends the text when it changed since lastModified (0 always asks for it).
   app.get('/api/body/*', async (request) => {
     const p = resolve(request, '/api/body');
     const sent = Number(request.query.lastModified ?? 0);
@@ -50,7 +51,7 @@ export default async function apiRoutes(app, { config, db }) {
     return { changed: true, lastModified: page.lastModified, body: page.body };
   });
 
-  // 7.2 Gravar: controlo de concorrência otimista por lastModified.
+  // Save: optimistic concurrency control on lastModified.
   app.post('/api/body/*', async (request, reply) => {
     const p = resolve(request, '/api/body');
     const form = request.body ?? {};
@@ -63,17 +64,38 @@ export default async function apiRoutes(app, { config, db }) {
 
     const result = db.save(p, text, sent, force);
     if (!result.ok) throw apiError(409, result.error);
+    hub.publish(p, 'change', { lastModified: result.lastModified });
     reply.type('application/json');
     return JSON.stringify(result.lastModified);
   });
 
-  // 7.3 Menu: só o primeiro nível abaixo do caminho, sem ordem garantida.
+  // Live updates (Server-Sent Events): `hello`, `change` and `presence`.
+  app.get('/api/events/*', async (request, reply) => {
+    const p = resolve(request, '/api/events');
+    if (!hub.canAccept(request.ip)) throw apiError(429, 'too-many-streams');
+
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Robots-Tag': 'noindex',
+    });
+    res.write(`retry: 2000\n\n`);
+    res.write(`event: hello\ndata: ${JSON.stringify({ lastModified: db.read(p).lastModified })}\n\n`);
+    hub.subscribe(p, request.ip, res);
+  });
+
+  // Direct subpages only, in no particular order.
   app.get('/api/menu/*', async (request) => db.menu(resolve(request, '/api/menu')));
 
-  // RF-15: página e subpáginas, um .txt por página.
+  // The page and its subpages, one .txt per page.
   app.get('/api/zip/*', async (request, reply) => {
     const p = resolve(request, '/api/zip');
-    const base = p.slice(0, p.lastIndexOf('/') + 1); // "/notas/" para "/notas/reuniao"
+    const base = p.slice(0, p.lastIndexOf('/') + 1); // "/notes/" for "/notes/meeting"
     const files = db.tree(p).map((row) => ({ name: row.path.slice(base.length) + '.txt', data: row.body }));
     const leaf = p.slice(base.length);
     const ascii = leaf.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');

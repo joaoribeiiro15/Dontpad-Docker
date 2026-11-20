@@ -19,9 +19,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Unitários e API
+      - name: Unit and API tests
         run: npm test
-      - name: Ponta a ponta (Playwright)
+      - name: End-to-end tests (Playwright)
         run: |
           npx playwright install --with-deps chromium
           npm run test:e2e
@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Construir a imagem
+      - name: Build the image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -49,7 +49,7 @@ jobs:
           tags: openpad:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Teste de fumo ao /healthz
+      - name: Smoke test
         run: |
           docker run -d --name openpad -p 3000:3000 openpad:ci
           for i in $(seq 1 30); do
@@ -57,12 +57,15 @@ jobs:
             sleep 1
           done
           curl -fsS http://localhost:3000/healthz | grep -q '"status":"ok"'
-          curl -fsS -X POST -d text=ola -d lastModified=0 -d force=false http://localhost:3000/api/body/fumo
-          curl -fsS "http://localhost:3000/api/body/fumo?lastModified=0" | grep -q '"body":"ola"'
-          docker image inspect openpad:ci --format 'Tamanho: {{.Size}} bytes'
+          curl -fsS -X POST -d text=hello -d lastModified=0 -d force=false http://localhost:3000/api/body/smoke
+          curl -fsS "http://localhost:3000/api/body/smoke?lastModified=0" | grep -q '"body":"hello"'
+          # The live-update stream answers with the current version.
+          curl -sN --max-time 2 http://localhost:3000/api/events/smoke > events.txt || true
+          grep -q '^event: hello' events.txt
+          docker image inspect openpad:ci --format 'Image size: {{.Size}} bytes'
           docker logs openpad
           docker rm -f openpad
-      - name: Ponta a ponta contra o contentor
+      - name: End-to-end tests against the container
         run: |
           docker run -d --name openpad -p 3000:3000 -e RATE_LIMIT_PER_MIN=100000 openpad:ci
           for i in $(seq 1 30); do curl -fsS http://localhost:3000/healthz && break; sleep 1; done
@@ -70,7 +73,7 @@ jobs:
           npx playwright install --with-deps chromium
           BASE_URL=http://localhost:3000 SYNC_INTERVAL_MS=5000 npx playwright test
           docker rm -f openpad
-      - name: Login no GHCR
+      - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -87,7 +90,7 @@ jobs:
             type=semver,pattern={{version}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
-      - name: Publicar
+      - name: Publish
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:

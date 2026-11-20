@@ -1,4 +1,4 @@
-// Escritor de ficheiros .zip mínimo (deflate, nomes UTF-8), sem dependências.
+// Minimal .zip writer (deflate, UTF-8 names) with no dependencies.
 
 import zlib from 'node:zlib';
 
@@ -8,7 +8,7 @@ function dosDateTime(date) {
   return { time, day };
 }
 
-/** files: [{ name, data }] com data em string ou Buffer. Devolve um Buffer. */
+/** files: [{ name, data }] where data is a string or a Buffer. Returns a Buffer. */
 export function buildZip(files, date = new Date()) {
   const { time, day } = dosDateTime(date);
   const locals = [];
@@ -23,8 +23,8 @@ export function buildZip(files, date = new Date()) {
 
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4); // versão necessária
-    local.writeUInt16LE(0x0800, 6); // bit 11: nome em UTF-8
+    local.writeUInt16LE(20, 4); // version needed
+    local.writeUInt16LE(0x0800, 6); // bit 11: UTF-8 name
     local.writeUInt16LE(8, 8); // deflate
     local.writeUInt16LE(time, 10);
     local.writeUInt16LE(day, 12);
@@ -37,7 +37,7 @@ export function buildZip(files, date = new Date()) {
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(0x0314, 4); // criado em Unix, versão 2.0
+    central.writeUInt16LE(0x0314, 4); // made by Unix, version 2.0
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0x0800, 8);
     central.writeUInt16LE(8, 10);
@@ -47,7 +47,7 @@ export function buildZip(files, date = new Date()) {
     central.writeUInt32LE(packed.length, 20);
     central.writeUInt32LE(raw.length, 24);
     central.writeUInt16LE(name.length, 28);
-    central.writeUInt32LE((0o100644 << 16) >>> 0, 38); // permissões rw-r--r--
+    central.writeUInt32LE((0o100644 << 16) >>> 0, 38); // rw-r--r--
     central.writeUInt32LE(offset, 42);
     centrals.push(central, name);
 
