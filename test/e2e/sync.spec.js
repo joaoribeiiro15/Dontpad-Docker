@@ -37,6 +37,12 @@ test('home page opens /<name> with an empty, focused editor', async ({ page }) =
   const name = unique('test');
   await page.goto('/');
   await expect(page.locator('h1')).toHaveText('openpad');
+  // A server without an address yet (e.g. a fresh container) asks for it first.
+  if ((await page.locator('body').getAttribute('data-setup')) === 'required') {
+    await expect(page.locator('#setup')).toBeVisible();
+    await page.locator('#setup-later').click();
+    await expect(page.locator('#setup')).toBeHidden();
+  }
   await expect(page.locator('#name')).toBeFocused();
   await expect(page.locator('#name')).toHaveAttribute('placeholder', 'your-secret-page');
   await page.locator('#name').fill(`  ${name}  `);

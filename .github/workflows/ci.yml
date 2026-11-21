@@ -67,7 +67,7 @@ jobs:
           docker rm -f openpad
       - name: End-to-end tests against the container
         run: |
-          docker run -d --name openpad -p 3000:3000 -e RATE_LIMIT_PER_MIN=100000 openpad:ci
+          docker run -d --name openpad -p 3000:3000 -e RATE_LIMIT_PER_MIN=100000 -e PUBLIC_ADDRESS=localhost:3000 openpad:ci
           for i in $(seq 1 30); do curl -fsS http://localhost:3000/healthz && break; sleep 1; done
           npm ci
           npx playwright install --with-deps chromium
